@@ -22,7 +22,8 @@ def draw_shape(img, sf, shape_idx, cx, cy, scale):
     verts = shape3d.resolve(sf, body)
     if not verts:
         return
-    scr = [(cx + v[0] * scale, cy - v[1] * scale) for v in verts]
+    # Grid row and object y both increase with world Y, so draw +y downwards.
+    scr = [(cx + v[0] * scale, cy + v[1] * scale) for v in verts]
     # Draw lower geometry first so raised parts land on top.
     items = []
     for p in body.prims:
@@ -56,7 +57,7 @@ def main(gamedir, theatre, out):
             if t < len(objs[4]):
                 cx, cy = (tx - 2 + 0.5) * tile_px, (ty - 2 + 0.5) * tile_px
                 for x, y, z, s in objs[4][t]:
-                    draw_shape(img, sf, s, cx + x * tile_px / 4096, cy - y * tile_px / 4096, tile_px / 4096)
+                    draw_shape(img, sf, s, cx + x * tile_px / 4096, cy + y * tile_px / 4096, tile_px / 4096)
     for level in (3, 2, 1):
         n = 16 * 4 ** (3 - level)
         tile_px = SIZE / n
@@ -68,7 +69,10 @@ def main(gamedir, theatre, out):
                     continue
                 cx, cy = (tx + 0.5) * tile_px, (ty + 0.5) * tile_px
                 for x, y, z, s in objs[level][t]:
-                    draw_shape(img, sf, s, cx + x * scale, cy - y * scale, scale)
+                    draw_shape(img, sf, s, cx + x * scale, cy + y * scale, scale)
+    # World +Y is drawn downwards above; flip so +Y (north, judging by the
+    # Barents Sea coastline) is at the top.
+    img = b"".join(bytes(img[r * SIZE:(r + 1) * SIZE]) for r in reversed(range(SIZE)))
     pal = EGA + [(40, 44, 52)] + [(0, 0, 0)] * 239
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     png.write_indexed(out, SIZE, SIZE, img, pal)

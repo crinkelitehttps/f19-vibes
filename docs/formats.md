@@ -142,14 +142,24 @@ u16 count[level][types[level]]
                                  shape bit 7 = state-dependent (destroyable)
 ```
 
-Positions are relative to the tile centre in units where a tile is 0x1000,
-scaled by the tile's level when drawn.
+Positions are relative to the tile centre, in units where a tile is 0x1000.
 
-**Open:** composing all levels into one map (`tools/render_map.py`) does
-not yet line up — the level-4 base layer disagrees with the level-3 detail.
-Axis orientation and the level-4 offset need confirming against the drawing
-code (the tile loop that calls `FUN_1000_0848` and `FUN_1fe6_082c`).
+### Placement (from `FUN_1000_03d0`, the terrain draw loop)
 
+For each level the camera's 32-bit world position is rescaled
+(`FUN_1000_07c6`: level 0 ×2, 1 ×1, 2 ÷4, 3 ÷16, 4 ÷64, rounded), then split
+into tile index (`>> 12`) and position within the tile (`& 0xFFF`). So a tile
+spans 0x1000 world units at level 1, 0x4000 at level 2, 0x10000 at level 3
+and 0x40000 at level 4; the level-3 world is 16 × 0x10000 square. Grid sizes
+per level (DGROUP 0x4ec) are 1024, 256, 64, 16, 8.
+
+A tile's objects are drawn at `tile_centre + (x, y, z)`. Grid column and
+object x both increase with world X; grid row and object y both increase
+with world Y. World +Y appears to be north: drawn that way, the North Cape
+map has open sea to the north (`tools/render_map.py`, output north-up).
+
+Level 0's ×2 scale gives a 0x800 tile, which does not fit the 4× hierarchy
+used elsewhere; NC has no level-0 data, so this is unresolved.
 ## .WLD
 
 Not referenced by any executable in the demo. Header `"BN"`, then
