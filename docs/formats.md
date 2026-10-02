@@ -128,7 +128,11 @@ u8  expand1[32][4*4]     level-1 type -> 4x4 level-0 types (all 0 in NC)
 ```
 
 Level 4 is an 8x8 base map per theatre in DGROUP at 0x758 (64 bytes each),
-inner 4x4 = types 0–15, border = filler. Lookups at level 4 add (2, 2).
+inner 4x4 = types 0–15, border = filler: `0x10` land (shape 0), `0x11` sea
+(shape 18). Lookups at level 4 add (2, 2). Which map belongs to which theatre
+is chosen at runtime (`[0x6580]+0x38`); for NC, map 2 is the best fit — its
+border continues the coastline on 13.5 of 16 edge segments (map 0: 12.5,
+map 3: 10, map 1: 5.5). Evidence, not proof.
 
 ## .3DT — objects per tile type
 
@@ -160,6 +164,28 @@ map has open sea to the north (`tools/render_map.py`, output north-up).
 
 Level 0's ×2 scale gives a 0x800 tile, which does not fit the 4× hierarchy
 used elsewhere; NC has no level-0 data, so this is unresolved.
+## glTF export
+
+`tools/export_gltf.py` writes `.glb` files (`out/gltf/`, not tracked):
+
+- `shapes FILE.3D3 OUT.glb` — one mesh + node per shape, in a row.
+- `terrain GAMEDIR NC OUT.glb` — whole theatre: ~75k nodes instancing the
+  theatre's 79 shape meshes, grouped by level.
+
+Game (x east, y north, z up) → glTF (X, Y, Z) = (x, z, −y); raw game units;
+level-L objects scaled 4^(L−1). Polygons are fan-triangulated and wound to
+match their face-plane normals; faces of plane-less shapes (two in
+`STFLT.3D3`) use double-sided material copies (materials 16–31). Lines and
+light points export as LINES/POINTS. Unlit EGA materials. Only each shape's
+own body is exported; LOD links are in node `extras`.
+
+`tools/check_glb.py FILE.glb [OUT.png]` validates structure and renders a
+top-down view from the glTF alone (it matches `render_map.py`).
+
+Known gaps for a renderer: coplanar ground decals (roads, runway markings)
+need depth bias or ordering; the engine uses painter's order. Polygons with
+more than 4 edges are fan-triangulated, which assumes convexity.
+
 ## .WLD
 
 Not referenced by any executable in the demo. Header `"BN"`, then
