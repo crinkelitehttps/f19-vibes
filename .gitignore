@@ -1,0 +1,9 @@
+# Original MicroProse demo files: copyrighted, kept locally only.
+# Verify integrity with: sha256sum -c gamefiles.sha256 (run from gamefiles/)
+/gamefiles/
+
+# Build/extraction output
+/build/
+/out/
+__pycache__/
+*.pyc
