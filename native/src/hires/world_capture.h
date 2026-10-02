@@ -35,6 +35,7 @@ struct HiresPrim {
     enum Kind : uint8_t { Poly, Line, Dot, Horizon } kind;
     uint8_t color = 0;       // palette index
     uint8_t color2 = 0;      // horizon: ground colour
+    uint32_t object = 0;     // shape instance the primitive belongs to
     HiresProj proj;
     std::vector<std::array<float, 3>> v;  // camera space (x right, y up, z forward)
     // Horizon: screen-space line point M, sky direction U (local coords),
@@ -79,6 +80,7 @@ private:
     std::vector<uint8_t> mask_;
     std::shared_ptr<HiresFrame> latest_;
     bool world_flag_ = false;
+    uint32_t object_ = 0;
 
     void on_program(const std::string& name, uint16_t seg, uint32_t size);
     HiresProj proj_state() const;

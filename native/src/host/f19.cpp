@@ -154,7 +154,7 @@ int main(int argc, char** argv) {
     int scale = 4;
     double mips = 25.0;   // emulated CPU speed; the game renders as fast as it allows
     int msaa = 8;
-    bool trace = false, original_driver = false, verify_driver = false, lowres = false;
+    bool trace = false, original_driver = false, verify_driver = false, lowres = false, no_depth = false;
     for (int i = 1; i < argc; i++) {
         if (!std::strcmp(argv[i], "--scale") && i + 1 < argc) scale = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--mips") && i + 1 < argc) mips = std::atof(argv[++i]);
@@ -163,6 +163,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--verify-driver")) verify_driver = true;
         else if (!std::strcmp(argv[i], "--lowres")) lowres = true;
         else if (!std::strcmp(argv[i], "--msaa") && i + 1 < argc) msaa = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--no-depth")) no_depth = true;
         else dir = argv[i];
     }
 
@@ -214,6 +215,7 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "OpenGL: %s\n", reinterpret_cast<const char*>(gl::GetString(GL_RENDERER)));
     GlRenderer renderer;
     renderer.msaa = msaa;
+    renderer.depth = !no_depth;
     if (!renderer.init()) std::fprintf(stderr, "warning: renderer initialisation reported a GL error\n");
     std::shared_ptr<const HiresFrame> shown_frame;
     GLuint hires_tex = 0;

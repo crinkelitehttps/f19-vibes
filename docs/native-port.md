@@ -180,6 +180,26 @@ transparent. Checked against the engine's own output frame by frame
 (`f19trace -H out.ppm` writes the hi-res frame, a world-only render, the
 engine's page and the mask).
 
+Renderer (`gl_render.cpp`, OpenGL 3.3 core): 8x MSAA; per-vertex depth
+`65536/Z` (exact under screen-space interpolation) in a 32-bit float
+buffer, larger = nearer. Primitives are grouped per shape instance (hook on
+the engine's vertex-transform loop). Flat objects (all vertices coplanar:
+ground tiles, decals) keep the engine's painter's order and only test
+against solid objects; solid objects draw colour with depth test but no
+write (their faces keep the engine's order), then write depth. Where the
+engine's sort is right the result is identical to painter's order (checked:
+0 differing pixels on a cockpit frame); where it is wrong, solid objects
+now occlude correctly. Under WSL, `GALLIUM_DRIVER=d3d12` is set
+automatically when the D3D12 bridge exists (GPU instead of llvmpipe).
+
+Frame rate: the game renders as fast as the emulated CPU allows and scales
+its physics by frame time (flips per emulated second in the demo: 4 MIPS
+~8, 8 ~21, 16 ~43, 32 ~62). The interpreter manages ~50 MIPS here; the
+default is 25 MIPS.
+
+Not captured yet (stay 320x200): the carrier's wake (drawn through another
+path, probably a C-called polygon fill in the engine segment).
+
 Known differences: distant thin geometry (land along the horizon) becomes
 sub-pixel slivers at high resolution where the 320x200 engine always
 produced at least one pixel.

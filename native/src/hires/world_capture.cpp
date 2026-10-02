@@ -58,6 +58,8 @@ const char* kHorizonMode = "80 3e ?? ?? 02 75 15 8a 16 ?? ??";
 const char* kHorizonSky = "c7 06 ?? ?? 00 00 8a 26 ?? ?? 9a";
 const char* kHorizonGround = "83 3e ?? ?? 00 78 13 8a 26 ?? ?? 9a";
 const char* kViewport = "8b d0 a1 ?? ?? 3b f0 77 10 3b e8 77 0c a1 ?? ??";
+// Vertex transform loop: one call per shape body drawn (object boundary).
+const char* kVertexLoop = "26 ac a8 80 75 ?? a8 7f 74 ?? 8a d8";
 const char* kCLine = "e8 0d 00 cb 55 56 57 06 e8 05 00 07 5f 5e 5d cb";
 // Rectangle fill called from C (2D, e.g. the TrackCam background).
 const char* kRectFill = "55 8b ec 57 56 55 1e 07 9a ?? ?? ?? ?? 50 8b 5e 06 8b 07 9a";
@@ -118,8 +120,9 @@ void WorldCapture::on_program(const std::string& name, uint16_t seg, uint32_t si
          hsky = one(kHorizonSky, "horizon_sky"), hgnd = one(kHorizonGround, "horizon_ground"),
          vp = one(kViewport, "viewport"), cline = one(kCLine, "c_line");
     auto dots = find_all(mem, lo, hi, kDot);
+    auto vloop = one(kVertexLoop, "vertex_loop");
     if (!proj || !projy || !eloop || !esetup || !poly || !line || !hor || !hcos || !hmode || !hsky || !hgnd || !vp ||
-        !cline || dots.empty()) {
+        !cline || !vloop || dots.empty()) {
         status = "engine signatures not found: " + status;
         m_.log("hires: %s\n", status.c_str());
         return;
@@ -145,6 +148,7 @@ void WorldCapture::on_program(const std::string& name, uint16_t seg, uint32_t si
     c_line_lin_ = *cline;
 
     m_.add_breakpoint(*esetup, [this] { edge_setup(); return false; });
+    m_.add_breakpoint(*vloop, [this] { object_++; return false; });
     m_.add_breakpoint(*poly + 10, [this] { capture_poly(); return false; });
     poly_lin_ = *poly + 10;
     m_.add_breakpoint(*line + 14, [this] { capture_line(); return false; });
@@ -227,6 +231,7 @@ void WorldCapture::capture_poly() {
     if (loop.size() < 3) { dbg[3]++; return; }
     HiresPrim p;
     p.kind = HiresPrim::Poly;
+    p.object = object_;
     p.color = r.r8(4);
     p.proj = proj_state();
     for (int v : loop) p.v.push_back(vertex(v));
@@ -242,6 +247,7 @@ void WorldCapture::capture_line() {
     if (idx < 0 || idx >= int(edges_.size())) return;
     HiresPrim p;
     p.kind = HiresPrim::Line;
+    p.object = object_;
     p.color = r.r8(4);
     p.proj = proj_state();
     p.v = {vertex(edges_[idx][0]), vertex(edges_[idx][1])};
@@ -253,6 +259,7 @@ void WorldCapture::capture_dot() {
     if (gfx_.current_draw_seg() != gfx_.page_seg(1)) return;
     HiresPrim p;
     p.kind = HiresPrim::Dot;
+    p.object = object_;
     p.color = uint8_t(gfx_.current_color());
     p.proj = proj_state();
     p.v = {vertex(0)};
@@ -266,6 +273,7 @@ void WorldCapture::capture_horizon() {
     if (gfx_.current_draw_seg() != gfx_.page_seg(1)) return;
     HiresPrim p;
     p.kind = HiresPrim::Horizon;
+    p.object = object_;
     p.proj = proj_state();
     p.color = ds8(sky_);
     p.color2 = ds8(ground_);

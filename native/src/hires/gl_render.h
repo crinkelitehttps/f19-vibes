@@ -23,6 +23,7 @@ public:
     int msaa = 8;                // samples for the 3D world (1 = off)
     float line_width = 0.75f;    // in 320x200 pixels
     bool draw_overlay = true;    // false: world only (debugging)
+    bool depth = true;           // per-pixel occlusion between solid objects
 
     // Composited frame at w x h; returns a texture valid until the next call.
     GLuint render_frame(const HiresFrame& f, int w, int h);
@@ -37,6 +38,9 @@ public:
 private:
     struct Vert { float x, y, z, r, g, b, a; };
     struct Run { int first, count; int sx, sy, sw, sh; };
+    // Consecutive primitives of one object within one viewport.
+    struct Group { int first, count; int run; uint32_t object; bool flat, background; };
+    std::vector<Group> groups_;
 
     GLuint world_prog_ = 0, tex_prog_ = 0;
     GLint world_size_loc_ = -1, tex_rect_loc_ = -1, tex_sampler_loc_ = -1;

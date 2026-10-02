@@ -189,6 +189,9 @@ int main(int argc, char** argv) {
             };
             save(hires_shot, true);
             save(hires_shot + ".world.ppm", false);
+            gr.depth = false;
+            save(hires_shot + ".nodepth.ppm", true);
+            gr.depth = true;
             // The engine's own 320x200 output for the same frame, and its world mask.
             FILE* fo = std::fopen((hires_shot + ".page.ppm").c_str(), "wb");
             std::fprintf(fo, "P6\n320 200\n255\n");

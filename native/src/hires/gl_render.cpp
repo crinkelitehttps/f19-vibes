@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 
 namespace f19 {
 
@@ -72,7 +73,7 @@ GLuint link(const char* vs, const char* fs) {
     return p;
 }
 
-struct P2 { float x, y; };
+struct P2 { float x, y, d = 0.0f; };
 
 // Sutherland-Hodgman against z >= kNearZ.
 std::vector<std::array<float, 3>> clip_near(const std::vector<std::array<float, 3>>& in) {
@@ -188,26 +189,62 @@ void GlRenderer::ensure_framebuffers(int w, int h) {
     fb_samples_ = samples;
 }
 
+// An object is flat if all its vertices lie on one plane (ground tiles,
+// decals such as runway markings and roads): those keep the engine's
+// painter's order instead of depth testing among themselves.
+static bool object_is_flat(const std::vector<const HiresPrim*>& prims) {
+    std::vector<std::array<double, 3>> pts;
+    for (auto* p : prims)
+        if (p->kind == HiresPrim::Poly || p->kind == HiresPrim::Line)
+            for (auto& v : p->v) pts.push_back({v[0], v[1], v[2]});
+    if (pts.size() < 4) return true;
+    double scale = 0;
+    for (auto& q : pts) scale = std::max({scale, std::fabs(q[0]), std::fabs(q[1]), std::fabs(q[2])});
+    // Plane through the first three non-collinear points.
+    for (size_t i = 1; i < pts.size(); i++)
+        for (size_t j = i + 1; j < pts.size(); j++) {
+            auto& a = pts[0];
+            double u[3] = {pts[i][0] - a[0], pts[i][1] - a[1], pts[i][2] - a[2]};
+            double v[3] = {pts[j][0] - a[0], pts[j][1] - a[1], pts[j][2] - a[2]};
+            double n[3] = {u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]};
+            double len = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+            if (len < 1e-6 * scale * scale) continue;
+            for (auto& q : pts) {
+                double d = ((q[0] - a[0]) * n[0] + (q[1] - a[1]) * n[1] + (q[2] - a[2]) * n[2]) / len;
+                if (std::fabs(d) > 1e-4 * scale) return false;
+            }
+            return true;
+        }
+    return true;
+}
+
 void GlRenderer::build_geometry(const HiresFrame& f, int w, int h) {
     verts_.clear();
     runs_.clear();
+    groups_.clear();
+    std::map<uint32_t, std::vector<const HiresPrim*>> by_object;
+    for (const HiresPrim& p : f.prims) by_object[p.object].push_back(&p);
+    std::map<uint32_t, bool> flat;
+    for (auto& [obj, list] : by_object) flat[obj] = object_is_flat(list);
     const float sx = float(w) / 320.0f, sy = float(h) / 200.0f;
     auto color = [&](uint8_t c) { return std::array<float, 4>{f.dac[c][0] / 63.0f, f.dac[c][1] / 63.0f, f.dac[c][2] / 63.0f, 1.0f}; };
+    // Depth = 65536 / Z: affine in screen space for planar polygons, so
+    // interpolating it per vertex is exact. 1 at the near plane, -> 0 far.
     auto tri_fan = [&](const std::vector<P2>& pts, std::array<float, 4> c) {
         for (size_t i = 1; i + 1 < pts.size(); i++)
-            for (const P2& p : {pts[0], pts[i], pts[i + 1]}) verts_.push_back({p.x, p.y, 0.0f, c[0], c[1], c[2], c[3]});
+            for (const P2& p : {pts[0], pts[i], pts[i + 1]}) verts_.push_back({p.x, p.y, p.d, c[0], c[1], c[2], c[3]});
     };
     auto project = [&](const HiresProj& p, const std::array<float, 3>& v) {
         float z = v[2] * p.zdiv;
-        return P2{(p.ox + p.cx + 256.0f * v[0] / z) * sx, (p.oy + p.cy - 192.0f * v[1] / z) * sy};
+        return P2{(p.ox + p.cx + 256.0f * v[0] / z) * sx, (p.oy + p.cy - 192.0f * v[1] / z) * sy, kNearZ / v[2]};
     };
     auto quad_line = [&](P2 a, P2 b, float width, std::array<float, 4> c) {
         float dx = b.x - a.x, dy = b.y - a.y, len = std::sqrt(dx * dx + dy * dy), hw = width * 0.5f;
         float tx, ty, nx, ny;
         if (len < 1e-3f) { tx = hw; ty = 0; nx = 0; ny = hw; }
         else { tx = dx / len * hw; ty = dy / len * hw; nx = -ty; ny = tx; }
-        tri_fan({{a.x - tx + nx, a.y - ty + ny}, {b.x + tx + nx, b.y + ty + ny}, {b.x + tx - nx, b.y + ty - ny},
-                 {a.x - tx - nx, a.y - ty - ny}}, c);
+        tri_fan({{a.x - tx + nx, a.y - ty + ny, a.d}, {b.x + tx + nx, b.y + ty + ny, b.d}, {b.x + tx - nx, b.y + ty - ny, b.d},
+                 {a.x - tx - nx, a.y - ty - ny, a.d}}, c);
     };
     const float lw = std::max(1.0f, line_width * sx);
 
@@ -219,6 +256,11 @@ void GlRenderer::build_geometry(const HiresFrame& f, int w, int h) {
         if (runs_.empty() || runs_.back().sx != r.sx || runs_.back().sy != r.sy || runs_.back().sw != r.sw ||
             runs_.back().sh != r.sh)
             runs_.push_back(r);
+        bool background = p.kind == HiresPrim::Horizon;
+        bool is_flat = p.kind == HiresPrim::Dot || flat[p.object];
+        if (groups_.empty() || groups_.back().object != p.object || groups_.back().run != int(runs_.size()) - 1 ||
+            groups_.back().background != background || groups_.back().flat != is_flat)
+            groups_.push_back(Group{int(verts_.size()), 0, int(runs_.size()) - 1, p.object, is_flat, background});
         switch (p.kind) {
             case HiresPrim::Poly: {
                 auto clipped = clip_near(p.v);
@@ -244,7 +286,8 @@ void GlRenderer::build_geometry(const HiresFrame& f, int w, int h) {
                 if (p.v[0][2] < kNearZ) break;
                 P2 q = project(p.proj, p.v[0]);
                 float s = std::max(1.0f, sx) * 0.5f;
-                tri_fan({{q.x - s, q.y - s}, {q.x + s, q.y - s}, {q.x + s, q.y + s}, {q.x - s, q.y + s}}, color(p.color));
+                tri_fan({{q.x - s, q.y - s, q.d}, {q.x + s, q.y - s, q.d}, {q.x + s, q.y + s, q.d}, {q.x - s, q.y + s, q.d}},
+                        color(p.color));
                 break;
             }
             case HiresPrim::Horizon: {
@@ -263,6 +306,7 @@ void GlRenderer::build_geometry(const HiresFrame& f, int w, int h) {
             }
         }
         runs_.back().count = int(verts_.size()) - runs_.back().first;
+        groups_.back().count = int(verts_.size()) - groups_.back().first;
     }
 }
 
@@ -275,6 +319,8 @@ GLuint GlRenderer::render_frame(const HiresFrame& f, int w, int h) {
     Viewport(0, 0, w, h);
     Disable(GL_SCISSOR_TEST);
     ClearColor(0, 0, 0, 1);
+    ClearDepth(0.0);  // depth is "larger = nearer"
+    DepthMask(GL_TRUE);
     Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     Disable(GL_DEPTH_TEST);
     Disable(GL_BLEND);
@@ -284,10 +330,39 @@ GLuint GlRenderer::render_frame(const HiresFrame& f, int w, int h) {
     BindBuffer(GL_ARRAY_BUFFER, vbo_);
     BufferData(GL_ARRAY_BUFFER, GLsizeiptr(verts_.size() * sizeof(Vert)), verts_.data(), GL_STREAM_DRAW);
     Enable(GL_SCISSOR_TEST);
-    for (const Run& r : runs_) {
-        if (!r.count) continue;
-        Scissor(r.sx, r.sy, r.sw, r.sh);
-        DrawArrays(GL_TRIANGLES, r.first, r.count);
+    if (!depth) {
+        for (const Run& r : runs_) {
+            if (!r.count) continue;
+            Scissor(r.sx, r.sy, r.sw, r.sh);
+            DrawArrays(GL_TRIANGLES, r.first, r.count);
+        }
+    } else {
+        // Depth holds solid objects only (larger = nearer). Background
+        // (horizon) ignores it; flat objects test against it in painter's
+        // order without writing; solid objects draw colour (test, no write,
+        // so their own faces keep the engine's order) then write depth.
+        DepthFunc(GL_GEQUAL);
+        for (const Group& g : groups_) {
+            if (!g.count) continue;
+            const Run& r = runs_[g.run];
+            Scissor(r.sx, r.sy, r.sw, r.sh);
+            if (g.background) {
+                Disable(GL_DEPTH_TEST);
+                DrawArrays(GL_TRIANGLES, g.first, g.count);
+                continue;
+            }
+            Enable(GL_DEPTH_TEST);
+            DepthMask(GL_FALSE);
+            DrawArrays(GL_TRIANGLES, g.first, g.count);
+            if (!g.flat) {
+                ColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+                DepthMask(GL_TRUE);
+                DrawArrays(GL_TRIANGLES, g.first, g.count);
+                ColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+            }
+        }
+        DepthMask(GL_TRUE);
+        Disable(GL_DEPTH_TEST);
     }
     Disable(GL_SCISSOR_TEST);
 
