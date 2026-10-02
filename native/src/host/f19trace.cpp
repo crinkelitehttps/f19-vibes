@@ -16,7 +16,7 @@
 #include "core/dos.h"
 #include "core/machine.h"
 #include "drivers/mgraphic.h"
-#include "hires/hires_render.h"
+#include "hires/gl_render.h"
 #include "hires/world_capture.h"
 #include <SDL3/SDL.h>
 
@@ -54,6 +54,7 @@ int main(int argc, char** argv) {
     }
     std::string program = "F19.COM", args, shot, keys, hires_shot;
     double millions = 50;
+    double mips_opt = 4.0;
     bool trace = false, prof = false, drv_trace = false, native_drv = false, verify_drv = false;
     for (int i = 2; i < argc; i++) {
         if (!std::strcmp(argv[i], "-p") && i + 1 < argc) program = argv[++i];
@@ -62,6 +63,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "-t")) trace = true;
         else if (!std::strcmp(argv[i], "-P")) prof = true;
         else if (!std::strcmp(argv[i], "-D")) drv_trace = true;
+        else if (!std::strcmp(argv[i], "-m") && i + 1 < argc) mips_opt = std::atof(argv[++i]);
         else if (!std::strcmp(argv[i], "-N")) native_drv = true;
         else if (!std::strcmp(argv[i], "-V")) native_drv = verify_drv = true;
         else if (!std::strcmp(argv[i], "-H") && i + 1 < argc) { hires_shot = argv[++i]; native_drv = true; }
@@ -70,6 +72,7 @@ int main(int argc, char** argv) {
     }
     Machine m(argv[1]);
     m.trace = trace;
+    m.ips_per_ms = uint32_t(mips_opt * 1000);
 
     // -D: trace calls into the graphics driver's exported entry points.
     struct EntryStats { std::vector<int> slots; uint64_t calls = 0; std::map<uint32_t, uint64_t> callers; std::vector<std::string> samples; };
@@ -136,6 +139,7 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "CPU at %04X:%04X\n", m.cpu.regs.s[CS], m.cpu.regs.ip);
     if (!shot.empty()) screenshot(m, shot.c_str());
     if (gfx && verify_drv) std::fprintf(stderr, "%s", gfx->report().c_str());
+    if (gfx) std::fprintf(stderr, "flips %llu in %.1f emulated s\n", (unsigned long long)gfx->stats[44].calls, m.now_us() / 1e6);
     if (capture) {
         std::fprintf(stderr, "hires: %s\n", capture->status.c_str());
         std::fprintf(stderr, "hires dbg: poly %llu wrongseg %llu few-edges %llu short-loop %llu | line %llu wrongseg %llu | draw seg %04X page1 %04X\n",
@@ -166,23 +170,22 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "hires: frame with %zu polys, %zu lines, %zu dots, %zu horizon\n", counts[0], counts[1], counts[2], counts[3]);
             SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "offscreen");
             SDL_Init(SDL_INIT_VIDEO);
-            SDL_Window* win = SDL_CreateWindow("f19trace", 1280, 960, SDL_WINDOW_HIDDEN);
-            SDL_Renderer* ren = SDL_CreateRenderer(win, "software");
-            HiresRenderer hr(ren);
+            SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+            SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+            SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+            SDL_Window* win = SDL_CreateWindow("f19trace", 64, 64, SDL_WINDOW_HIDDEN | SDL_WINDOW_OPENGL);
+            SDL_GLContext glc = SDL_GL_CreateContext(win);
+            if (!glc || !gl::load()) { std::fprintf(stderr, "hires: no OpenGL: %s\n", SDL_GetError()); return 1; }
+            GlRenderer gr;
+            gr.init();
             auto save = [&](const std::string& path, bool overlay) {
-                hr.draw_overlay = overlay;
-                SDL_Texture* tex = hr.render(*frame, 1280, 960);
-                SDL_SetRenderTarget(ren, tex);
-                SDL_Surface* s = SDL_RenderReadPixels(ren, nullptr);
-                SDL_SetRenderTarget(ren, nullptr);
-                if (!s) { std::fprintf(stderr, "hires: read pixels failed: %s\n", SDL_GetError()); return; }
-                SDL_Surface* rgb = SDL_ConvertSurface(s, SDL_PIXELFORMAT_RGB24);
+                gr.draw_overlay = overlay;
+                GLuint tex = gr.render_frame(*frame, 1280, 960);
+                auto rgb = gr.read_rgb(tex, 1280, 960);
                 FILE* fo = std::fopen(path.c_str(), "wb");
-                std::fprintf(fo, "P6\n%d %d\n255\n", rgb->w, rgb->h);
-                for (int y = 0; y < rgb->h; y++) std::fwrite(static_cast<uint8_t*>(rgb->pixels) + y * rgb->pitch, 1, rgb->w * 3, fo);
+                std::fprintf(fo, "P6\n1280 960\n255\n");
+                std::fwrite(rgb.data(), 1, rgb.size(), fo);
                 std::fclose(fo);
-                SDL_DestroySurface(rgb);
-                SDL_DestroySurface(s);
             };
             save(hires_shot, true);
             save(hires_shot + ".world.ppm", false);

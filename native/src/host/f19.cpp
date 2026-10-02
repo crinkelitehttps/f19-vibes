@@ -1,7 +1,7 @@
 // F-19 native host (SDL3): runs the original game in the interpreter and
 // presents mode 13h / text mode in a window.
 //
-// Usage: f19 [GAMEDIR] [--scale N] [--mips N] [--trace] [--original-driver] [--verify-driver] [--lowres]
+// Usage: f19 [GAMEDIR] [--scale N] [--mips N] [--msaa N] [--trace] [--original-driver] [--verify-driver] [--lowres]
 //   The 3D world is rendered at the window's resolution unless --lowres
 //   (needs the native driver).
 //   GAMEDIR defaults to the current directory; it must be writable (the
@@ -19,7 +19,7 @@
 #include "core/dos.h"
 #include "core/machine.h"
 #include "drivers/mgraphic.h"
-#include "hires/hires_render.h"
+#include "hires/gl_render.h"
 #include "hires/world_capture.h"
 
 using namespace f19;
@@ -152,7 +152,8 @@ uint8_t fkey_scan(uint8_t scan, bool shift, bool ctrl, bool alt) {
 int main(int argc, char** argv) {
     std::string dir = ".";
     int scale = 4;
-    double mips = 4.0;
+    double mips = 25.0;   // emulated CPU speed; the game renders as fast as it allows
+    int msaa = 8;
     bool trace = false, original_driver = false, verify_driver = false, lowres = false;
     for (int i = 1; i < argc; i++) {
         if (!std::strcmp(argv[i], "--scale") && i + 1 < argc) scale = std::atoi(argv[++i]);
@@ -161,6 +162,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--original-driver")) original_driver = true;
         else if (!std::strcmp(argv[i], "--verify-driver")) verify_driver = true;
         else if (!std::strcmp(argv[i], "--lowres")) lowres = true;
+        else if (!std::strcmp(argv[i], "--msaa") && i + 1 < argc) msaa = std::atoi(argv[++i]);
         else dir = argv[i];
     }
 
@@ -190,22 +192,33 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Under WSL, Mesa defaults to software rendering; use the GPU through
+    // the D3D12 bridge when it is available (overridable).
+    if (!std::getenv("GALLIUM_DRIVER") && SDL_GetPathInfo("/usr/lib/wsl/lib/libd3d12.so", nullptr))
+        setenv("GALLIUM_DRIVER", "d3d12", 0);
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 1;
     }
-    SDL_Window* win = SDL_CreateWindow("F-19 Stealth Fighter (native)", 320 * scale, 240 * scale, SDL_WINDOW_RESIZABLE);
-    SDL_Renderer* ren = SDL_CreateRenderer(win, nullptr);
-    SDL_SetRenderVSync(ren, 1);
-    SDL_Texture* gfx = SDL_CreateTexture(ren, SDL_PIXELFORMAT_XRGB8888, SDL_TEXTUREACCESS_STREAMING, 320, 200);
-    SDL_Texture* txt = SDL_CreateTexture(ren, SDL_PIXELFORMAT_XRGB8888, SDL_TEXTUREACCESS_STREAMING, 640, 400);
-    SDL_SetTextureScaleMode(gfx, SDL_SCALEMODE_NEAREST);
-    SDL_SetTextureScaleMode(txt, SDL_SCALEMODE_NEAREST);
-    // 4:3 display, letterboxed in the window.
-    HiresRenderer hires(ren);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+    SDL_Window* win = SDL_CreateWindow("F-19 Stealth Fighter (native)", 320 * scale, 240 * scale,
+                                       SDL_WINDOW_RESIZABLE | SDL_WINDOW_OPENGL | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    SDL_GLContext glc = win ? SDL_GL_CreateContext(win) : nullptr;
+    if (!glc || !gl::load()) {
+        std::fprintf(stderr, "OpenGL 3.3 unavailable: %s\n", SDL_GetError());
+        return 1;
+    }
+    SDL_GL_SetSwapInterval(1);
+    std::fprintf(stderr, "OpenGL: %s\n", reinterpret_cast<const char*>(gl::GetString(GL_RENDERER)));
+    GlRenderer renderer;
+    renderer.msaa = msaa;
+    if (!renderer.init()) std::fprintf(stderr, "warning: renderer initialisation reported a GL error\n");
     std::shared_ptr<const HiresFrame> shown_frame;
-    SDL_Texture* hires_tex = nullptr;
+    GLuint hires_tex = 0;
     int hires_w = 0, hires_h = 0;
+    std::vector<uint32_t> screen(640 * 400);
 
     uint64_t last = SDL_GetTicksNS();
     bool running = true;
@@ -245,54 +258,47 @@ int main(int argc, char** argv) {
         m.run(uint64_t(elapsed_ms) * m.ips_per_ms);
 
         uint8_t mode = m.mem.read8(0x449);
-        void* pixels;
-        int pitch;
         // 4:3 letterbox in the window's pixels.
         int ow, oh;
-        SDL_GetCurrentRenderOutputSize(ren, &ow, &oh);
+        SDL_GetWindowSizeInPixels(win, &ow, &oh);
         int vw = ow, vh = ow * 3 / 4;
         if (vh > oh) { vh = oh; vw = oh * 4 / 3; }
-        SDL_FRect view{float((ow - vw) / 2), float((oh - vh) / 2), float(vw), float(vh)};
-        SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
-        SDL_RenderClear(ren);
+        float vx = float((ow - vw) / 2), vy = float((oh - vh) / 2);
         auto frame = capture.latest();
         bool use_hires = mode == 0x13 && frame && m.now_us() - frame->time_us < 300000;
+        GLuint tex;
         if (use_hires) {
             if (frame != shown_frame || !hires_tex || hires_w != vw || hires_h != vh) {
-                hires_tex = hires.render(*frame, vw, vh);
+                hires_tex = renderer.render_frame(*frame, vw, vh);
                 shown_frame = frame;
                 hires_w = vw;
                 hires_h = vh;
             }
-            SDL_RenderTexture(ren, hires_tex, nullptr, &view);
+            tex = hires_tex;
         } else if (mode == 0x13) {
-            SDL_LockTexture(gfx, nullptr, &pixels, &pitch);
-            for (int y = 0; y < 200; y++) {
-                uint32_t* row = reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(pixels) + y * pitch);
-                for (int x = 0; x < 320; x++) {
-                    const uint8_t* c = m.dac[m.mem.read8(0xA0000 + y * 320 + x)];
-                    row[x] = uint32_t(c[0] * 255 / 63) << 16 | uint32_t(c[1] * 255 / 63) << 8 | uint32_t(c[2] * 255 / 63);
-                }
+            for (int i = 0; i < 64000; i++) {
+                const uint8_t* c = m.dac[m.mem.read8(0xA0000 + i)];
+                screen[i] = 0xFF000000u | uint32_t(c[0] * 255 / 63) << 16 | uint32_t(c[1] * 255 / 63) << 8 | uint32_t(c[2] * 255 / 63);
             }
-            SDL_UnlockTexture(gfx);
-            SDL_RenderTexture(ren, gfx, nullptr, &view);
+            tex = renderer.upload(screen.data(), 320, 200);
+            shown_frame = nullptr;
         } else {
-            SDL_LockTexture(txt, nullptr, &pixels, &pitch);
             for (int r = 0; r < 25; r++)
                 for (int c = 0; c < 80; c++) {
                     uint8_t ch = m.mem.read8(0xB8000 + (r * 80 + c) * 2);
                     uint8_t at = m.mem.read8(0xB8000 + (r * 80 + c) * 2 + 1);
-                    uint32_t fg = kTextPalette[at & 15], bg = kTextPalette[(at >> 4) & 7];
+                    uint32_t fg = 0xFF000000u | kTextPalette[at & 15], bg = 0xFF000000u | kTextPalette[(at >> 4) & 7];
                     for (int y = 0; y < 16; y++) {
                         uint8_t bits = font.glyphs.empty() ? 0 : font.glyphs[ch * font.h + std::min(y, font.h - 1)];
-                        uint32_t* row = reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(pixels) + (r * 16 + y) * pitch) + c * 8;
+                        uint32_t* row = &screen[(r * 16 + y) * 640 + c * 8];
                         for (int x = 0; x < 8; x++) row[x] = (bits & (0x80 >> x)) ? fg : bg;
                     }
                 }
-            SDL_UnlockTexture(txt);
-            SDL_RenderTexture(ren, txt, nullptr, &view);
+            tex = renderer.upload(screen.data(), 640, 400);
+            shown_frame = nullptr;
         }
-        SDL_RenderPresent(ren);
+        renderer.present(tex, ow, oh, vx, vy, float(vw), float(vh));
+        SDL_GL_SwapWindow(win);
     }
     if (m.exited) std::fprintf(stderr, "stopped: %s\n", m.stop_reason.c_str());
     if (verify_driver) std::fprintf(stderr, "%s", native_gfx.report().c_str());

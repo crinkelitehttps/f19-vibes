@@ -27,8 +27,8 @@ target_link_libraries(sst_runner PRIVATE f19core)
 find_package(SDL3 REQUIRED CONFIG)
 find_package(ZLIB REQUIRED)
 
-# High-resolution world renderer (SDL3 geometry API).
-add_library(f19hires STATIC src/hires/hires_render.cpp)
+# OpenGL 3.3 renderer (world at window resolution, MSAA).
+add_library(f19hires STATIC src/hires/gl.cpp src/hires/gl_render.cpp)
 target_link_libraries(f19hires PUBLIC f19core SDL3::SDL3)
 
 # Headless runner: boot the game, trace services, dump screenshots.
