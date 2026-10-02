@@ -32,7 +32,126 @@ wheel, 95–107 reds/blues. A second table follows at `0x13869`: the 16 EGA
 colours repeated at progressively greyer/lighter shades (purpose TBD —
 likely haze/depth shading).
 
-## Not yet decoded
+## Not yet decoded (images)
 
 - `LAND2C.PAK` — likely the CGA version of `LAND.PIC` (begins with what look
   like CGA dither patterns: `0000 5555 aaaa ffff`).
+
+## Executables
+
+`DGAME.EXE`, `DSTART.EXE`, `DSU.EXE` and `DEND.EXE` are Microsoft **EXEPACK**
+compressed (Microsoft C 1988 runtime). `tools/unexepack.py` restores them;
+unpacked copies go in `build/unpacked/`. Addresses below refer to the unpacked
+`DGAME.EXE`: load image starts at file offset 0x480, DGROUP (DS) is image
+segment 0x2305 (file offset 0x480 + 0x23050), and the hand-written 3D engine
+lives in image segment 0x1000.
+
+Theatre file stems are in DGROUP: `regn`, `lb`, `pg`, `nc`, `ce` (`.xxx`
+placeholders; extensions are substituted at load time). The demo ships only
+`NC` (North Cape).
+
+## .3D3 — shape library
+
+Loaders: `FUN_1000_098a` (theatre file + `photo.3d3` subset) and
+`FUN_1000_c966` (`STFLT.3D3`, aircraft/weapons). Parser:
+`tools/shape3d.py`; preview: `tools/render_shapes.py`.
+
+```
+u16 magic ("33")
+u16 n
+u16 offset[n]          relative to the data start
+u16 data_length
+u8  data[data_length]  shapes
+-- theatre files only (trailer, the shared vertex table):
+u8  m                  (0 = no trailer)
+u8  xi[m], yi[m], zi[m]
+u8  kx; s16 X[kx]      shared vertex i = (X[xi[i]], Y[yi[i]], Z[zi[i]])
+u8  ky; s16 Y[ky]
+u8  kz; s16 Z[kz]
+```
+
+Shape:
+
+```
+u8  size_class                    indexes cull/LOD distance tables
+{ u8 0x80|level; s16 rel } *      LOD: if farther than threshold[level],
+                                  jump to (address of rel) + rel (may point
+                                  into another shape's data); repeat
+body
+```
+
+Body — first byte decides the kind (after an optional prefix byte with
+`(b & 0x60) == 0x60`, whose low 2 bits select an axis snapped to ground):
+
+- `0x3F cc` — single point at the origin, colour `cc`.
+- `0x3E cc n idx[n]` — n light points from the shared vertex table.
+- otherwise a mesh:
+
+```
+u8  np (low 5 bits; bit 6 = draw-order flag)
+{ s16 nx, ny, nz, d } [np]        face planes; plane visible if
+                                  n·eye > d. Builds a visibility bitmask.
+u8  nv                            bit 7 set: shared-table vertices
+  { mask; s16 x, y, z } [nv]        own vertices, or
+  { mask; u8 index } [nv & 0x7F]    shared vertices
+u8  ne;  { mask; u8 v0, v1 } [ne] edges
+u8  nprims  (0xFF = plane-sorted mode, see below)
+prims:
+  poly: u8 b (b&3 == 1, plane = b>>3); u8 n; u8 edge[n]; u8 colour
+  line: u8 b (b&3 != 1); mask; u8 edge; u8 colour
+```
+
+`mask` is u16, or u32 when np > 16; an element is processed only if it
+shares a bit with the visible-plane mask. Colour 255 = not drawn; others
+are 0–15, remapped at runtime through a table at DGROUP 0x8de (EGA indices
+render correctly as-is). Coordinates: x, y horizontal, z up; terrain tiles
+span ±2048.
+
+Plane-sorted mode (`nprims == 0xFF`): `2*np` bytes of sort data, 1 byte,
+`u16 offset[np]`, `u8 count[np]`, then primitive groups (per plane) at
+base + offset.
+
+All 118 shapes in `NC.3D3`, `STFLT.3D3` and `PHOTO.3D3` parse to exactly
+their table lengths.
+
+## .3DG — terrain tile hierarchy
+
+Loader `FUN_1000_0e2a`, lookup `FUN_1000_0848`. Parser: `tools/world.py`.
+
+```
+u16 magic ("22")
+u8  unused[16]           read then overwritten
+u8  top[16*16]           level-3 tile types
+u8  expand3[32][4*4]     level-3 type -> 4x4 level-2 types
+u8  expand2[32][4*4]     level-2 type -> 4x4 level-1 types
+u8  expand1[32][4*4]     level-1 type -> 4x4 level-0 types (all 0 in NC)
+```
+
+Level 4 is an 8x8 base map per theatre in DGROUP at 0x758 (64 bytes each),
+inner 4x4 = types 0–15, border = filler. Lookups at level 4 add (2, 2).
+
+## .3DT — objects per tile type
+
+Loader `FUN_1000_0cc8`.
+
+```
+u16 magic ("11")
+u16 types[5]                     per level 0..4 (32 each in NC)
+u16 count[level][types[level]]
+{ s16 x, y, z; u16 shape } ...   per level, per type; shape low byte used;
+                                 shape bit 7 = state-dependent (destroyable)
+```
+
+Positions are relative to the tile centre in units where a tile is 0x1000,
+scaled by the tile's level when drawn.
+
+**Open:** composing all levels into one map (`tools/render_map.py`) does
+not yet line up — the level-4 base layer disagrees with the level-3 detail.
+Axis orientation and the level-4 offset need confirming against the drawing
+code (the tile loop that calls `FUN_1000_0848` and `FUN_1fe6_082c`).
+
+## .WLD
+
+Not referenced by any executable in the demo. Header `"BN"`, then
+16-byte records that look like `(id, x, y, ..., type)` — likely the full
+game's mission/target database. Undecoded.
