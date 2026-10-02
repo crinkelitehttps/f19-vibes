@@ -141,7 +141,13 @@ int main(int argc, char** argv) {
     m.trace = trace;
     m.ips_per_ms = uint32_t(mips * 1000);
     if (!m.dos->start_program("F19.COM", "")) {
-        std::fprintf(stderr, "cannot start F19.COM in %s\n", dir.c_str());
+        std::fprintf(stderr,
+                     "cannot start F19.COM in '%s'\n"
+                     "usage: f19 GAMEDIR [--scale N] [--mips N] [--trace]\n"
+                     "GAMEDIR is a writable copy of the game files, e.g.:\n"
+                     "  mkdir -p out/run/native && cp fullgame/* out/run/native/ && chmod -R u+w out/run/native\n"
+                     "  build/native/f19 out/run/native\n",
+                     dir.c_str());
         return 1;
     }
 
