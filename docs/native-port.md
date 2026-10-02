@@ -148,6 +148,42 @@ in `EGAME.EXE`) and render the decoded assets (`tools/shape3d.py`,
 and distance rules (see `viewer/`). Composite the 2D layer (cockpit, HUD,
 menus): first upscaled, then redrawn at high resolution where it matters.
 
+**Status (implemented):** `native/src/hires/`. `WorldCapture` finds the
+engine by byte signature once the flight program has unpacked itself
+(`tools/engine_sigs.py` checks the signatures against both executables;
+data-segment offsets are read from the matched code, so the demo and full
+game share one build). Hooks:
+
+| Hook | Where (demo DGAME, engine-segment offsets as in `build/seg2000.asm`) | Captured |
+|---|---|---|
+| edge setup | 1000 | edge record -> vertex indices |
+| polygon | 16A4 (far call to set colour) | AH colour, edges at ES:SI (n at SI-1) |
+| line | 1640 | AH colour, BX edge record |
+| dot (3 sites) | 17EE, 18E6, 1997 (call 1AC0) | vertex slot 0, driver colour |
+| horizon | 0486 | up vector [9B0..9B6], view mode, altitude, colours |
+
+Camera space: x right, y up, z forward, 32-bit; projection
+`x = cx + 256·X/Z`, `y = cy − 192·Y/Z` (Z doubled with the zoom flag,
+halved per shift step), near plane Z ≥ 65536; viewport `[3A89]`,`[3A8B]`,
+driver draw origin added. The horizon line passes through
+`(cx − d·s, cy − 0.75·d·c)` with direction `(c, −0.75·s)`,
+`d = 256·[9B0]/[9B2]`, `s = −[9B4]/32768`, `c = [9B6]/32768` (one colour
+when `[9B2]` ≤ 0x1F0B; view mode 2 draws sky only).
+
+World tagging: the back page is watched (memory write tags); a native
+driver call is "world" when the engine makes it after a capture hook,
+until a driver call from elsewhere or an engine 2D entry (C line, rect
+fill). At each flip (slot 44) the frame = primitives + page + mask.
+`HiresRenderer` draws the primitives in the engine's order with SDL3's
+geometry API at window resolution, then the page with world pixels
+transparent. Checked against the engine's own output frame by frame
+(`f19trace -H out.ppm` writes the hi-res frame, a world-only render, the
+engine's page and the mask).
+
+Known differences: distant thin geometry (land along the horizon) becomes
+sub-pixel slivers at high resolution where the 320x200 engine always
+produced at least one pixel.
+
 ### 3. Progressive porting
 
 Replace game systems with native C++ one function at a time, starting with

@@ -1,7 +1,9 @@
 // F-19 native host (SDL3): runs the original game in the interpreter and
 // presents mode 13h / text mode in a window.
 //
-// Usage: f19 [GAMEDIR] [--scale N] [--mips N] [--trace] [--original-driver] [--verify-driver]
+// Usage: f19 [GAMEDIR] [--scale N] [--mips N] [--trace] [--original-driver] [--verify-driver] [--lowres]
+//   The 3D world is rendered at the window's resolution unless --lowres
+//   (needs the native driver).
 //   GAMEDIR defaults to the current directory; it must be writable (the
 //   game saves its roster there). Use a copy of the original files.
 #include <SDL3/SDL.h>
@@ -17,6 +19,8 @@
 #include "core/dos.h"
 #include "core/machine.h"
 #include "drivers/mgraphic.h"
+#include "hires/hires_render.h"
+#include "hires/world_capture.h"
 
 using namespace f19;
 
@@ -149,13 +153,14 @@ int main(int argc, char** argv) {
     std::string dir = ".";
     int scale = 4;
     double mips = 4.0;
-    bool trace = false, original_driver = false, verify_driver = false;
+    bool trace = false, original_driver = false, verify_driver = false, lowres = false;
     for (int i = 1; i < argc; i++) {
         if (!std::strcmp(argv[i], "--scale") && i + 1 < argc) scale = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--mips") && i + 1 < argc) mips = std::atof(argv[++i]);
         else if (!std::strcmp(argv[i], "--trace")) trace = true;
         else if (!std::strcmp(argv[i], "--original-driver")) original_driver = true;
         else if (!std::strcmp(argv[i], "--verify-driver")) verify_driver = true;
+        else if (!std::strcmp(argv[i], "--lowres")) lowres = true;
         else dir = argv[i];
     }
 
@@ -171,6 +176,9 @@ int main(int argc, char** argv) {
     MGraphicNative native_gfx(m);
     native_gfx.enabled = !original_driver;
     native_gfx.verify = verify_driver;
+    // High-resolution world rendering: capture the engine's 3D geometry.
+    WorldCapture capture(m, native_gfx);
+    capture.enabled = !lowres && !original_driver;
     if (!m.dos->start_program("F19.COM", "")) {
         std::fprintf(stderr,
                      "cannot start F19.COM in '%s'\n"
@@ -194,7 +202,10 @@ int main(int argc, char** argv) {
     SDL_SetTextureScaleMode(gfx, SDL_SCALEMODE_NEAREST);
     SDL_SetTextureScaleMode(txt, SDL_SCALEMODE_NEAREST);
     // 4:3 display, letterboxed in the window.
-    SDL_SetRenderLogicalPresentation(ren, 640, 480, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+    HiresRenderer hires(ren);
+    std::shared_ptr<const HiresFrame> shown_frame;
+    SDL_Texture* hires_tex = nullptr;
+    int hires_w = 0, hires_h = 0;
 
     uint64_t last = SDL_GetTicksNS();
     bool running = true;
@@ -236,8 +247,25 @@ int main(int argc, char** argv) {
         uint8_t mode = m.mem.read8(0x449);
         void* pixels;
         int pitch;
+        // 4:3 letterbox in the window's pixels.
+        int ow, oh;
+        SDL_GetCurrentRenderOutputSize(ren, &ow, &oh);
+        int vw = ow, vh = ow * 3 / 4;
+        if (vh > oh) { vh = oh; vw = oh * 4 / 3; }
+        SDL_FRect view{float((ow - vw) / 2), float((oh - vh) / 2), float(vw), float(vh)};
+        SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
         SDL_RenderClear(ren);
-        if (mode == 0x13) {
+        auto frame = capture.latest();
+        bool use_hires = mode == 0x13 && frame && m.now_us() - frame->time_us < 300000;
+        if (use_hires) {
+            if (frame != shown_frame || !hires_tex || hires_w != vw || hires_h != vh) {
+                hires_tex = hires.render(*frame, vw, vh);
+                shown_frame = frame;
+                hires_w = vw;
+                hires_h = vh;
+            }
+            SDL_RenderTexture(ren, hires_tex, nullptr, &view);
+        } else if (mode == 0x13) {
             SDL_LockTexture(gfx, nullptr, &pixels, &pitch);
             for (int y = 0; y < 200; y++) {
                 uint32_t* row = reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(pixels) + y * pitch);
@@ -247,7 +275,7 @@ int main(int argc, char** argv) {
                 }
             }
             SDL_UnlockTexture(gfx);
-            SDL_RenderTexture(ren, gfx, nullptr, nullptr);
+            SDL_RenderTexture(ren, gfx, nullptr, &view);
         } else {
             SDL_LockTexture(txt, nullptr, &pixels, &pitch);
             for (int r = 0; r < 25; r++)
@@ -262,7 +290,7 @@ int main(int argc, char** argv) {
                     }
                 }
             SDL_UnlockTexture(txt);
-            SDL_RenderTexture(ren, txt, nullptr, nullptr);
+            SDL_RenderTexture(ren, txt, nullptr, &view);
         }
         SDL_RenderPresent(ren);
     }

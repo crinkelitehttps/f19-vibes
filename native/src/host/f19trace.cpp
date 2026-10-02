@@ -16,6 +16,9 @@
 #include "core/dos.h"
 #include "core/machine.h"
 #include "drivers/mgraphic.h"
+#include "hires/hires_render.h"
+#include "hires/world_capture.h"
+#include <SDL3/SDL.h>
 
 using namespace f19;
 
@@ -49,7 +52,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "usage: %s GAMEDIR [-p PROGRAM] [-a ARGS] [-n MILLIONS] [-t] [-s OUT.ppm] [-k KEYS]\n", argv[0]);
         return 2;
     }
-    std::string program = "F19.COM", args, shot, keys;
+    std::string program = "F19.COM", args, shot, keys, hires_shot;
     double millions = 50;
     bool trace = false, prof = false, drv_trace = false, native_drv = false, verify_drv = false;
     for (int i = 2; i < argc; i++) {
@@ -61,6 +64,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "-D")) drv_trace = true;
         else if (!std::strcmp(argv[i], "-N")) native_drv = true;
         else if (!std::strcmp(argv[i], "-V")) native_drv = verify_drv = true;
+        else if (!std::strcmp(argv[i], "-H") && i + 1 < argc) { hires_shot = argv[++i]; native_drv = true; }
         else if (!std::strcmp(argv[i], "-s") && i + 1 < argc) shot = argv[++i];
         else if (!std::strcmp(argv[i], "-k") && i + 1 < argc) keys = argv[++i];
     }
@@ -102,9 +106,11 @@ int main(int argc, char** argv) {
         });
     }
     std::unique_ptr<MGraphicNative> gfx;
+    std::unique_ptr<WorldCapture> capture;
     if (native_drv) {
         gfx = std::make_unique<MGraphicNative>(m);
         gfx->verify = verify_drv;
+        if (!hires_shot.empty()) capture = std::make_unique<WorldCapture>(m, *gfx);
     }
     if (!m.dos->start_program(program, args)) {
         std::fprintf(stderr, "cannot start %s\n", program.c_str());
@@ -129,7 +135,73 @@ int main(int argc, char** argv) {
                  m.stop_reason.empty() ? "budget reached" : m.stop_reason.c_str());
     std::fprintf(stderr, "CPU at %04X:%04X\n", m.cpu.regs.s[CS], m.cpu.regs.ip);
     if (!shot.empty()) screenshot(m, shot.c_str());
-    if (gfx) std::fprintf(stderr, "%s", gfx->report().c_str());
+    if (gfx && verify_drv) std::fprintf(stderr, "%s", gfx->report().c_str());
+    if (capture) {
+        std::fprintf(stderr, "hires: %s\n", capture->status.c_str());
+        std::fprintf(stderr, "hires dbg: poly %llu wrongseg %llu few-edges %llu short-loop %llu | line %llu wrongseg %llu | draw seg %04X page1 %04X\n",
+                     (unsigned long long)capture->dbg[0], (unsigned long long)capture->dbg[1], (unsigned long long)capture->dbg[2],
+                     (unsigned long long)capture->dbg[3], (unsigned long long)capture->dbg[4], (unsigned long long)capture->dbg[5],
+                     gfx->current_draw_seg(), gfx->page_seg(1));
+        std::fprintf(stderr, "hires dbg: edge_setup %llu; poly hook at %05X bytes:", (unsigned long long)capture->dbg[6], capture->poly_lin_);
+        for (int k = -10; k < 6; k++) std::fprintf(stderr, " %02X", m.mem.read8(capture->poly_lin_ + k));
+        std::fprintf(stderr, "\n");
+        auto frame = capture->latest();
+        if (!frame) std::fprintf(stderr, "hires: no frame captured\n");
+        else {
+            size_t counts[4] = {};
+            for (auto& p : frame->prims) counts[p.kind]++;
+            if (const char* dump = std::getenv("F19_DUMP_PRIMS")) {
+                FILE* fd = std::fopen(dump, "w");
+                for (auto& p : frame->prims) {
+                    const uint8_t* d = frame->dac[p.color];
+                    std::fprintf(fd, "%d col %3d rgb %02d%02d%02d c2 %3d cx %.0f cy %.0f zdiv %.3f vp %.0fx%.0f org %.0f,%.0f",
+                                 p.kind, p.color, d[0], d[1], d[2], p.color2, p.proj.cx, p.proj.cy, p.proj.zdiv, p.proj.vp_w, p.proj.vp_h, p.proj.ox, p.proj.oy);
+                    if (p.kind == HiresPrim::Horizon)
+                        std::fprintf(fd, " M %.1f,%.1f U %.3f,%.3f uniform %d skyonly %d", p.hx, p.hy, p.ux, p.uy, p.uniform, p.sky_only);
+                    for (auto& v : p.v) std::fprintf(fd, " (%.0f %.0f %.0f)", v[0], v[1], v[2]);
+                    std::fprintf(fd, "\n");
+                }
+                std::fclose(fd);
+            }
+            std::fprintf(stderr, "hires: frame with %zu polys, %zu lines, %zu dots, %zu horizon\n", counts[0], counts[1], counts[2], counts[3]);
+            SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "offscreen");
+            SDL_Init(SDL_INIT_VIDEO);
+            SDL_Window* win = SDL_CreateWindow("f19trace", 1280, 960, SDL_WINDOW_HIDDEN);
+            SDL_Renderer* ren = SDL_CreateRenderer(win, "software");
+            HiresRenderer hr(ren);
+            auto save = [&](const std::string& path, bool overlay) {
+                hr.draw_overlay = overlay;
+                SDL_Texture* tex = hr.render(*frame, 1280, 960);
+                SDL_SetRenderTarget(ren, tex);
+                SDL_Surface* s = SDL_RenderReadPixels(ren, nullptr);
+                SDL_SetRenderTarget(ren, nullptr);
+                if (!s) { std::fprintf(stderr, "hires: read pixels failed: %s\n", SDL_GetError()); return; }
+                SDL_Surface* rgb = SDL_ConvertSurface(s, SDL_PIXELFORMAT_RGB24);
+                FILE* fo = std::fopen(path.c_str(), "wb");
+                std::fprintf(fo, "P6\n%d %d\n255\n", rgb->w, rgb->h);
+                for (int y = 0; y < rgb->h; y++) std::fwrite(static_cast<uint8_t*>(rgb->pixels) + y * rgb->pitch, 1, rgb->w * 3, fo);
+                std::fclose(fo);
+                SDL_DestroySurface(rgb);
+                SDL_DestroySurface(s);
+            };
+            save(hires_shot, true);
+            save(hires_shot + ".world.ppm", false);
+            // The engine's own 320x200 output for the same frame, and its world mask.
+            FILE* fo = std::fopen((hires_shot + ".page.ppm").c_str(), "wb");
+            std::fprintf(fo, "P6\n320 200\n255\n");
+            for (int i = 0; i < 64000; i++) {
+                const uint8_t* d = frame->dac[frame->page[i]];
+                uint8_t rgb[3] = {uint8_t(d[0] * 255 / 63), uint8_t(d[1] * 255 / 63), uint8_t(d[2] * 255 / 63)};
+                std::fwrite(rgb, 1, 3, fo);
+            }
+            std::fclose(fo);
+            fo = std::fopen((hires_shot + ".mask.ppm").c_str(), "wb");
+            std::fprintf(fo, "P6\n320 200\n255\n");
+            for (int i = 0; i < 64000; i++) { uint8_t v = frame->mask[i] ? 255 : 0; uint8_t rgb[3] = {v, v, v}; std::fwrite(rgb, 1, 3, fo); }
+            std::fclose(fo);
+            SDL_Quit();
+        }
+    }
     if (drv_trace) {
         std::vector<std::pair<uint64_t, uint32_t>> order;
         for (auto& [lin, e] : entries) order.emplace_back(e.calls, lin);
@@ -140,6 +212,11 @@ int main(int argc, char** argv) {
             for (int s2 : e.slots) slots += (slots.empty() ? "" : ",") + std::to_string(s2);
             std::fprintf(stderr, "slot %-6s lin %05X calls %8llu callers %zu\n", slots.c_str(), lin, (unsigned long long)calls, e.callers.size());
             for (auto& smp : e.samples) std::fprintf(stderr, "        %s\n", smp.c_str());
+            std::vector<std::pair<uint64_t, uint32_t>> cs;
+            for (auto [c, n] : e.callers) cs.emplace_back(n, c);
+            std::sort(cs.rbegin(), cs.rend());
+            for (size_t i = 0; i < cs.size() && i < 8; i++)
+                std::fprintf(stderr, "        caller %04X:%04X x%llu\n", cs[i].second >> 16, cs[i].second & 0xFFFF, (unsigned long long)cs[i].first);
         }
     }
     if (prof) {

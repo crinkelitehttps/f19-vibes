@@ -60,6 +60,14 @@ public:
     // Text mode (B800) as a printable string, for headless bring-up.
     std::string text_screen();
     std::function<void(uint8_t mode)> on_mode_set;
+    // Program-load listeners (EXEC 4B00 / start): name, image segment, size.
+    std::vector<std::function<void(const std::string& name, uint16_t image_seg, uint32_t size)>> program_listeners;
+    void notify_program_loaded(const std::string& name, uint16_t seg, uint32_t size) {
+        for (auto& f : program_listeners) f(name, seg, size);
+    }
+    // Called at every INT 21h (before handling). Useful to act once a newly
+    // loaded program has unpacked itself (EXEPACK) and started running.
+    std::vector<std::function<void()>> dos_call_listeners;
     // Overlay-load listeners (EXEC 4B03), e.g. for drivers.
     std::vector<std::function<void(const std::string& name, uint16_t seg)>> overlay_listeners;
     void notify_overlay_loaded(const std::string& name, uint16_t seg) {

@@ -15,6 +15,7 @@ add_library(f19core STATIC
   src/core/machine.cpp
   src/core/dos.cpp
   src/drivers/mgraphic.cpp
+  src/hires/world_capture.cpp
 )
 target_include_directories(f19core PUBLIC src)
 
@@ -22,12 +23,18 @@ target_include_directories(f19core PUBLIC src)
 add_executable(sst_runner tests/sst_runner.cpp)
 target_link_libraries(sst_runner PRIVATE f19core)
 
-# Headless runner: boot the game, trace services, dump screenshots.
-add_executable(f19trace src/host/f19trace.cpp)
-target_link_libraries(f19trace PRIVATE f19core)
 
-# Interactive host (SDL3).
 find_package(SDL3 REQUIRED CONFIG)
 find_package(ZLIB REQUIRED)
+
+# High-resolution world renderer (SDL3 geometry API).
+add_library(f19hires STATIC src/hires/hires_render.cpp)
+target_link_libraries(f19hires PUBLIC f19core SDL3::SDL3)
+
+# Headless runner: boot the game, trace services, dump screenshots.
+add_executable(f19trace src/host/f19trace.cpp)
+target_link_libraries(f19trace PRIVATE f19core f19hires)
+
+# Interactive host (SDL3).
 add_executable(f19 src/host/f19.cpp)
-target_link_libraries(f19 PRIVATE f19core SDL3::SDL3 ZLIB::ZLIB)
+target_link_libraries(f19 PRIVATE f19core f19hires ZLIB::ZLIB)

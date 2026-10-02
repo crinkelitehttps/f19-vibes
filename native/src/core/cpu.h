@@ -30,8 +30,14 @@ public:
     void write8(uint32_t a, uint8_t v) {
         a &= kSize - 1;
         if (journal) journal->emplace_back(a, bytes_[a]);
+        if (a - watch_lo < watch_len) watch_mask[a - watch_lo] = watch_tag;
         bytes_[a] = v;
     }
+    // Write tagging: writes to [watch_lo, watch_lo + watch_len) store
+    // `watch_tag` in watch_mask (who last wrote each byte).
+    uint32_t watch_lo = 0, watch_len = 0;
+    uint8_t* watch_mask = nullptr;
+    uint8_t watch_tag = 0;
     // When set, every write appends (address, previous value).
     std::vector<std::pair<uint32_t, uint8_t>>* journal = nullptr;
     // Word access within a segment wraps the offset at 64K, as on the 8086.

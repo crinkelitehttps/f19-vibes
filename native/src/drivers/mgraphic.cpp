@@ -146,11 +146,15 @@ bool MGraphicNative::dispatch(int slot) {
     SlotStats& st = stats[slot];
     st.calls++;
     current_slot_ = slot;
+    if (slot == 44 && on_flip) on_flip();
+    uint8_t tag = (is_world_call && is_world_call()) ? 1 : 0;
+    m_.mem.watch_tag = tag;
     if (verify && (st.calls % verify_every) == 0) {
         run_verified(slot, it->second);
     } else {
         (this->*(it->second))();
     }
+    m_.mem.watch_tag = 0;
     return true;
 }
 

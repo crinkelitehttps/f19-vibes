@@ -280,6 +280,10 @@ bool Dos::start_program(const std::string& dos_name, const std::string& args) {
     }
     r.flags = 0xF202;
     m_.log("DOS start %s psp=%04X entry %04X:%04X\n", dos_name.c_str(), psp, r.s[CS], r.ip);
+    {
+        uint16_t mn, mx;
+        m_.notify_program_loaded(upper(dos_name), uint16_t(psp + 0x10), image_paras(file, is_exe, &mn, &mx) * 16);
+    }
     return true;
 }
 
@@ -351,6 +355,7 @@ void Dos::exec(uint8_t mode) {
     }
     nr.flags = 0xF202;
     r = nr;
+    m_.notify_program_loaded(upper(name), uint16_t(psp + 0x10), img * 16);
 }
 
 void Dos::terminate(uint8_t code) {
@@ -434,6 +439,7 @@ void Dos::fail(uint16_t err) {
 void Dos::ok() { m_.set_return_flag(CF, false); }
 
 void Dos::int21() {
+    for (auto& f : m_.dos_call_listeners) f();
     Regs& r = cpu_.regs;
     Memory& mem = m_.mem;
     uint8_t ah = r.r8(4), al = r.r8(0);

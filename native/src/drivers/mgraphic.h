@@ -35,6 +35,15 @@ public:
     std::map<int, SlotStats> stats;
     std::string report() const;
 
+    // For the high-resolution renderer.
+    std::function<bool()> is_world_call;   // decides the write tag for a call
+    std::function<void()> on_flip;         // before slot 44 copies page 1 -> 0
+    uint16_t current_color() const { return color(); }
+    uint16_t page_seg(int i) const { return page(uint16_t(i)); }
+    uint16_t current_origin() const { return origin(); }
+    uint16_t current_draw_seg() const { return draw_seg(); }
+    bool attached() const { return cs_ != 0; }
+
 private:
     Machine& m_;
     uint16_t ds_ = 0;  // driver data segment (load segment)
