@@ -7,3 +7,7 @@
 /out/
 __pycache__/
 *.pyc
+
+# Full game (copyrighted, kept locally only). Verify: cd fullgame && sha256sum -c ../fullgame.sha256
+/fullgame/
+/f19stealthfighter.zip

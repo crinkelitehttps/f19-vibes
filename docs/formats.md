@@ -37,6 +37,21 @@ likely haze/depth shading).
 - `LAND2C.PAK` — likely the CGA version of `LAND.PIC` (begins with what look
   like CGA dither patterns: `0000 5555 aaaa ffff`).
 
+## Full game
+
+`fullgame/` (not tracked; checksums in `fullgame.sha256`) holds F-19
+version 435.00 (10/14/88), 80 files. All parsers work unchanged on its four
+theatres (NC, LB, PG, CE: every shape parses exactly; LB/PG/CE have 144
+shared vertices). `NC.3D3/3DG/3DT` and `PHOTO.3D3` are identical to the
+demo; `STFLT.3D3` and `NC.WLD` differ. EXEPACKed: `DS`, `EGAME`, `END`,
+`START` (unpacked to `build/unpacked/full/`). `EGAME.EXE` (10/28/88) is
+older than the demo's `DGAME.EXE` (11/11/88), so DGAME addresses in this
+document do not apply to it directly. Provenance: `F19.COM` is dated 1993
+and references `c:\c\bin\cv.exe` and `missions.EXE` (absent); `F19.COL`,
+`F19.KEY`, `F19.WPN` are 1989/1993 — the distribution has been modified
+after release. WLD files have per-file first words (`NC.WLD` "BN",
+`LIBYA.WLD` 0x584a, ...), so that word is not a magic number.
+
 ## Executables
 
 `DGAME.EXE`, `DSTART.EXE`, `DSU.EXE` and `DEND.EXE` are Microsoft **EXEPACK**
@@ -133,9 +148,11 @@ u8  expand1[32][4*4]     level-1 type -> 4x4 level-0 types (all 0 in NC)
 Level 4 is an 8x8 base map per theatre in DGROUP at 0x758 (64 bytes each),
 inner 4x4 = types 0–15, border = filler: `0x10` land (shape 0), `0x11` sea
 (shape 18). Lookups at level 4 add (2, 2). Which map belongs to which theatre
-is chosen at runtime (`[0x6580]+0x38`); for NC, map 2 is the best fit — its
-border continues the coastline on 13.5 of 16 edge segments (map 0: 12.5,
-map 3: 10, map 1: 5.5). Evidence, not proof.
+is chosen at runtime (`[0x6580]+0x38`). The assignment follows the order
+of the theatre names in DGROUP — LB 0, PG 1, NC 2, CE 3 — and fits the
+coastlines: scoring how well each map's border continues the theatre's
+edge (16 segments), the best distinct fits are PG→1 (15.7), CE→3 (14.3),
+NC→2 (13.5), LB→0 (13.4; map 3 scores 13.6 but is CE's).
 
 ## .3DT — objects per tile type
 

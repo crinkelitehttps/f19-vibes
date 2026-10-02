@@ -7,6 +7,8 @@ the goal of rewriting it on a modern renderer.
 
 - `gamefiles/` — original demo files (read-only, not tracked; checksums in
   `gamefiles.sha256`).
+- `fullgame/` — the full game, v435.00 (read-only, not tracked; checksums in
+  `fullgame.sha256`; extracted from `f19stealthfighter.zip`).
 - `tools/` — format decoders and analysis scripts.
 - `docs/` — notes on file formats and program structure.
 

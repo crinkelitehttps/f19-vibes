@@ -1,6 +1,7 @@
 """Top-down render of a theatre's terrain (levels 3..1) from .3DG/.3DT/.3D3.
 
-Usage: python3 render_map.py GAMEDIR THEATRE OUT.png   (e.g. gamefiles NC out/map/NC.png)
+Usage: python3 render_map.py GAMEDIR THEATRE OUT.png [SITES.WLD]
+       (e.g. gamefiles NC out/map/NC.png gamefiles/NC.WLD)
 """
 import sys
 from pathlib import Path
@@ -42,7 +43,7 @@ def draw_shape(img, sf, shape_idx, cx, cy, scale):
             line(img, SIZE, SIZE, pts[0], pts[1], col & 15)
 
 
-def main(gamedir, theatre, out):
+def main(gamedir, theatre, out, wld=None):
     gd = Path(gamedir)
     sf = shape3d.load(gd / f"{theatre}.3D3")
     g = world.load_3dg(gd / f"{theatre}.3DG")
@@ -70,6 +71,16 @@ def main(gamedir, theatre, out):
                 cx, cy = (tx + 0.5) * tile_px, (ty + 0.5) * tile_px
                 for x, y, z, s in objs[level][t]:
                     draw_shape(img, sf, s, cx + x * scale, cy + y * scale, scale)
+    if wld:
+        # Site markers (WLD y runs southwards = downwards in this unflipped image).
+        colours = {0x124: 13, 0x12b: 13, 0x113: 12, 0x11a: 14}
+        for site in world.load_wld(wld):
+            px, py = int(site["x"] * SIZE / world.WORLD_SIZE), int((world.WORLD_SIZE - site["y"]) * SIZE / world.WORLD_SIZE)
+            py = SIZE - 1 - py   # pre-flip
+            for d in range(-9, 10):
+                for x, y in ((px + d, py - 9), (px + d, py + 9), (px - 9, py + d), (px + 9, py + d)):
+                    if 0 <= x < SIZE and 0 <= y < SIZE:
+                        img[y * SIZE + x] = colours.get(site["type"], 15)
     # World +Y is drawn downwards above; flip so +Y (north, judging by the
     # Barents Sea coastline) is at the top.
     img = b"".join(bytes(img[r * SIZE:(r + 1) * SIZE]) for r in reversed(range(SIZE)))
@@ -79,4 +90,4 @@ def main(gamedir, theatre, out):
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:4])
+    main(*sys.argv[1:5])

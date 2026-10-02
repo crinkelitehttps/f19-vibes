@@ -35,10 +35,11 @@ def tile_at(g, level, x, y):
 # playable area; the border is filler (0x10/0x11). Lookups add (2, 2).
 DGROUP_FILE_OFFSET = 0x480 + 0x23050   # in the EXEPACK-unpacked DGAME.EXE
 BASE_MAPS = 0x758
-THEATRE_INDEX = {"LB": 0, "PG": 1, "NC": 2, "CE": 3}   # provisional ordering
+THEATRE_INDEX = {"LB": 0, "PG": 1, "NC": 2, "CE": 3}   # = DGROUP name order; coastline-fit confirmed
 
 
 def load_base_map(unpacked_dgame, theatre):
+    """Base maps from the demo's DGAME.EXE (DGROUP offsets are demo-specific)."""
     d = Path(unpacked_dgame).read_bytes()
     o = DGROUP_FILE_OFFSET + BASE_MAPS + 64 * THEATRE_INDEX[theatre]
     return d[o:o + 64]
@@ -80,7 +81,7 @@ WORLD_SIZE = 16 * 0x10000
 def load_wld(path, offset=0):
     """Returns [{id, type, x, y (world units, +y north), raw}] for the site table."""
     d = Path(path).read_bytes()[offset:]
-    assert d[:2] == b"BN", "not a WLD block"
+    # Header: u16 (varies per file: checksum/seed?), then three counts.
     sites = []
     for o in range(0x38, len(d) - 15, 16):
         r = struct.unpack_from("<8H", d, o)
