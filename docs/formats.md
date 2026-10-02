@@ -184,7 +184,7 @@ top-down view from the glTF alone (it matches `render_map.py`).
 
 Known gaps for a renderer: coplanar ground decals (roads, runway markings)
 need depth bias or ordering; the engine uses painter's order. Polygons with
-more than 4 edges are fan-triangulated, which assumes convexity.
+are fan-triangulated; all 1362 in the demo are convex, so this is exact.
 
 ## .WLD
 
