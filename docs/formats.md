@@ -84,7 +84,10 @@ Body — first byte decides the kind (after an optional prefix byte with
 `(b & 0x60) == 0x60`, whose low 2 bits select an axis snapped to ground):
 
 - `0x3F cc` — single point at the origin, colour `cc`.
-- `0x3E cc n idx[n]` — n light points from the shared vertex table.
+- `0x3E xx n idx[n]` — n ground dots from the shared vertex table (`xx` is
+  skipped). Drawn white, EGA 7 beyond camera depth 0x9C4, EGA 8 beyond 0x1388:
+  ground-texture speed cues. Level-1 tile type 0 places one (shape 15) in most
+  level-1 tiles.
 - otherwise a mesh:
 
 ```
@@ -182,9 +185,18 @@ own body is exported; LOD links are in node `extras`.
 `tools/check_glb.py FILE.glb [OUT.png]` validates structure and renders a
 top-down view from the glTF alone (it matches `render_map.py`).
 
-Known gaps for a renderer: coplanar ground decals (roads, runway markings)
-need depth bias or ordering; the engine uses painter's order. Polygons with
-are fan-triangulated; all 1362 in the demo are convex, so this is exact.
+Polygons are fan-triangulated; all 1362 in the demo are convex, so this is
+exact. Mesh extras carry `shape` and `kind` (`mesh`, `point`, `lights`).
+
+Rendering notes (implemented in `viewer/index.html`):
+- **Draw order.** Mesh primitives keep the engine's order. Flat shapes stack
+  coplanar polygons and the engine relies on painter's order: draw flat
+  geometry level 4 → 1, then by primitive index, without depth writes.
+- **Draw distance.** At each level the engine draws only 9 tiles: a 3×3
+  block reaching two tiles ahead of the camera, chosen from 8 heading sectors
+  (DGROUP 0x332; 3×3 centred table at 0x4b2/0x4c4 when looking steeply down),
+  far to near. Only level 4 covers the world. Drawing every level everywhere
+  buries the ground under ~450k ground dots (level-1 tile type 0 → shape 15).
 
 ## .WLD
 

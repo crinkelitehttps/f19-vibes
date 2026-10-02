@@ -18,8 +18,11 @@ Conventions:
 - One unlit material per EGA colour index (KHR_materials_unlit).
 - Only each shape's own body is exported; LOD jumps to coarser shapes are
   recorded in node extras ("lods": [[level, target_offset], ...]).
-- Ground decals (roads, runway markings) are coplanar with the ground; the
-  engine relies on draw order, so a renderer needs depth bias or ordering.
+- Mesh primitives are in the engine's draw order (consecutive same-colour
+  primitives merged). Order matters: flat shapes such as terrain tiles stack
+  coplanar polygons (a full-tile background, then features on top) and the
+  engine relies on painter's order, so a renderer must draw coplanar
+  primitives in glTF primitive order.
 """
 import json
 import struct
@@ -103,17 +106,17 @@ class GlbBuilder:
         self.accessors.append({"bufferView": view, "componentType": 5123, "count": len(idx), "type": "SCALAR"})
         return len(self.accessors) - 1
 
-    def add_mesh(self, name, groups):
-        """groups: {(mode, colour): (positions, indices)}. Returns mesh index or None."""
+    def add_mesh(self, name, groups, extras=None):
+        """groups: [(mode, material, positions, indices)] in draw order. Returns mesh index or None."""
         prims = []
-        for (mode, colour), (pts, idx) in sorted(groups.items()):
+        for mode, colour, pts, idx in groups:
             if not idx:
                 continue
             prims.append({"attributes": {"POSITION": self._positions(pts)}, "indices": self._indices(idx),
                           "mode": mode, "material": colour})
         if not prims:
             return None
-        self.meshes.append({"name": name, "primitives": prims})
+        self.meshes.append({"name": name, "primitives": prims, **({"extras": extras} if extras else {})})
         return len(self.meshes) - 1
 
     def add_node(self, node):
@@ -141,13 +144,17 @@ class GlbBuilder:
 
 
 def shape_groups(sf, shape, stats):
-    """Build {(mode, colour): (positions, indices)} for a shape's body."""
+    """Build glTF primitive groups for a shape's body, in the engine's draw order."""
     body = shape.body
     verts = shape3d.resolve(sf, body)
-    groups = {}
+    groups = []     # [(mode, colour, positions, indices)] in draw order
 
     def group(mode, colour):
-        return groups.setdefault((mode, colour), ([], []))
+        # Consecutive primitives with the same mode/colour share a glTF
+        # primitive; otherwise start a new one, so file order is preserved.
+        if not groups or groups[-1][:2] != (mode, colour):
+            groups.append((mode, colour, [], []))
+        return groups[-1][2:]
 
     for p in body.prims:
         if p[0] == "poly" and p[3] != 255:
@@ -191,7 +198,8 @@ def build_shape_meshes(gb, sf, prefix, stats):
     for s in sf.shapes:
         if s is None or s.body is None:
             continue
-        m = gb.add_mesh(f"{prefix}_{s.index:03d}", shape_groups(sf, s, stats))
+        m = gb.add_mesh(f"{prefix}_{s.index:03d}", shape_groups(sf, s, stats),
+                        {"shape": s.index, "kind": s.body.kind})
         if m is not None:
             meshes[s.index] = m
     return meshes

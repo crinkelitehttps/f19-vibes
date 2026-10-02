@@ -23,3 +23,18 @@ python3 tools/check_glb.py out/gltf/NC_terrain.glb out/gltf/check.png
 ```
 
 The map and terrain exports need the unpacked `DGAME.EXE` in `build/unpacked/`.
+
+## Viewer
+
+A three.js viewer for the exported `.glb` files (shapes and the North Cape
+terrain). Export the glTF files first (see above), then:
+
+```
+python3 tools/serve_viewer.py        # http://localhost:8019/viewer/
+```
+
+Terrain mode emulates the engine's draw order and draw distances (each level
+only near the camera). `/viewer/?selftest` renders fixed views and writes
+screenshots plus `report.json` to `out/viewer_report/`; run it headless with
+`firefox --headless --no-remote --profile <tmpdir> "http://localhost:8019/viewer/?selftest"`.
+Three.js is loaded from the jsDelivr CDN.

@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>F-19 Asset Viewer</title>
+<style>
+  :root {
+    --bg: #1b1e24; --panel: rgba(20, 22, 28, 0.88); --text: #e4e6eb; --muted: #9aa1ad;
+    --accent: #5fd3ff; --border: #3a3f4b;
+  }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 13px/1.4 system-ui, sans-serif; overflow: hidden; }
+  canvas { display: block; }
+  #panel { position: fixed; top: 12px; left: 12px; width: 260px; max-height: calc(100% - 24px);
+    overflow: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px; box-sizing: border-box; }
+  #panel h1 { font-size: 14px; margin: 0 0 8px; }
+  label { display: block; margin: 6px 0 2px; color: var(--muted); }
+  select, button { width: 100%; background: #262a33; color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 4px 6px; font: inherit; }
+  .row { display: flex; gap: 6px; margin-top: 6px; }
+  .row button { flex: 1; }
+  .check { display: flex; align-items: center; gap: 6px; margin: 4px 0; color: var(--text); }
+  .check input { margin: 0; }
+  #info { margin-top: 10px; white-space: pre-wrap; font: 12px/1.45 ui-monospace, monospace; color: var(--muted); }
+  #help { margin-top: 10px; color: var(--muted); font-size: 12px; }
+  #status { position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%); background: var(--panel);
+    border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; }
+  #status:empty { display: none; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="panel">
+  <h1>F-19 Asset Viewer</h1>
+  <label for="file">File</label>
+  <select id="file">
+    <option value="STFLT">STFLT.3D3: aircraft &amp; weapons</option>
+    <option value="PHOTO">PHOTO.3D3: recon targets</option>
+    <option value="NC">NC.3D3: North Cape shapes</option>
+    <option value="NC_terrain">North Cape terrain</option>
+  </select>
+  <div id="shapeControls">
+    <label for="shape">Shape</label>
+    <select id="shape"></select>
+    <div class="row"><button id="prev">◀ Prev</button><button id="next">Next ▶</button></div>
+  </div>
+  <div id="terrainControls" hidden>
+    <label>Levels</label>
+    <div id="levels"></div>
+    <label class="check"><input type="checkbox" id="ranges" checked> Engine draw distances</label>
+  </div>
+  <label class="check"><input type="checkbox" id="wire"> Wireframe</label>
+  <div id="info"></div>
+  <div id="help"></div>
+</div>
+<div id="status"></div>
+
+<script type="module">
+import * as THREE from "three";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+const params = new URLSearchParams(location.search);
+const SELFTEST = params.has("selftest");
+const GLTF_DIR = params.get("dir") || "../out/gltf/";
+
+const $ = (id) => document.getElementById(id);
+const status = (s) => { $("status").textContent = s; };
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true,
+  preserveDrawingBuffer: SELFTEST });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+document.body.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 1, 1e7);
+const orbit = new OrbitControls(camera, renderer.domElement);
+orbit.enableDamping = true;
+
+addEventListener("resize", () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+const loader = new GLTFLoader();
+const cache = new Map();
+function loadGlb(name) {
+  if (!cache.has(name)) {
+    cache.set(name, new Promise((resolve, reject) =>
+      loader.load(GLTF_DIR + name + ".glb", resolve,
+        (e) => e.total && status(`Loading ${name}.glb… ${Math.round(100 * e.loaded / e.total)}%`),
+        reject)));
+  }
+  return cache.get(name);
+}
+
+// Points and lines: keep them visible at any distance.
+function fixupMaterials(root) {
+  root.traverse((o) => {
+    if (o.isPoints) o.material.size = 3, o.material.sizeAttenuation = false;
+  });
+}
+
+let content = null;   // current root object in the scene
+let mode = null;      // "shapes" | "terrain"
+let wireMats = [];
+
+function setContent(obj) {
+  if (content) scene.remove(content);
+  content = obj;
+  scene.add(obj);
+  wireMats = [];
+  obj.traverse((o) => o.material && !o.isPoints && !o.isLineSegments && wireMats.push(o.material));
+  applyWire();
+}
+function applyWire() { for (const m of wireMats) m.wireframe = $("wire").checked; }
+$("wire").onchange = applyWire;
+
+// ---------- Shapes mode ----------
+let shapeNodes = [];
+let shapesRoot = null;
+
+async function showShapes(name) {
+  mode = "shapes";
+  $("shapeControls").hidden = false;
+  $("terrainControls").hidden = true;
+  $("help").textContent = "Drag to orbit, right-drag to pan, scroll to zoom. ← → to step through shapes.";
+  const gltf = await loadGlb(name);
+  shapesRoot = gltf.scene;
+  fixupMaterials(shapesRoot);
+  shapeNodes = shapesRoot.children.filter((c) => c.userData && "shape" in c.userData);
+  $("shape").innerHTML = shapeNodes.map((n, i) => `<option value="${i}">${n.name}</option>`).join("");
+  scene.background = new THREE.Color(0x2a2f3a);
+  setContent(shapesRoot);
+  selectShape(0);
+  status("");
+}
+
+function selectShape(i) {
+  i = (i + shapeNodes.length) % shapeNodes.length;
+  $("shape").value = i;
+  shapeNodes.forEach((n, k) => (n.visible = k === i));
+  const node = shapeNodes[i];
+  const box = new THREE.Box3().setFromObject(node);
+  const size = box.getSize(new THREE.Vector3());
+  const centre = box.getCenter(new THREE.Vector3());
+  const r = Math.max(size.length() / 2, 1);
+  orbit.target.copy(centre);
+  camera.position.copy(centre).add(new THREE.Vector3(1.1, 0.6, 1.4).normalize().multiplyScalar(r * 2.6));
+  camera.near = r / 100; camera.far = r * 100;
+  camera.updateProjectionMatrix();
+  let tris = 0, lines = 0, points = 0;
+  node.traverse((o) => {
+    const g = o.geometry; if (!g) return;
+    const n = g.index ? g.index.count : g.attributes.position.count;
+    if (o.isPoints) points += n; else if (o.isLineSegments) lines += n / 2; else tris += n / 3;
+  });
+  const u = node.userData;
+  const lods = (u.lods || []).map(([lvl, off]) => `level ${lvl} → byte ${off}`).join("\n  ") || "none";
+  $("info").textContent =
+    `shape       ${u.shape}\nsize class  ${u.size_class}\ntriangles   ${tris}\nlines       ${lines}\n` +
+    `points      ${points}\nextent      ${size.x.toFixed(0)} × ${size.z.toFixed(0)} × ${size.y.toFixed(0)}\n` +
+    `            (E × N × up)\nLOD links\n  ${lods}`;
+}
+$("shape").onchange = (e) => selectShape(+e.target.value);
+$("prev").onclick = () => selectShape(+$("shape").value - 1);
+$("next").onclick = () => selectShape(+$("shape").value + 1);
+
+// ---------- Terrain mode ----------
+// The exported terrain has one node per placed object (~75k). Collapse them
+// into one InstancedMesh per (shape mesh, primitive) to keep draw calls low.
+// Ground is coplanar, within shapes and across levels; the original engine
+// draws in painter's order (coarse levels first, then each shape's primitives
+// in file order). So flat geometry skips depth writes and is ordered by level,
+// then by glTF primitive index (the exporter preserves draw order).
+let terrainRoot = null;
+const levelGroups = {};
+
+// Engine draw distances: at every level the engine draws only 9 tiles, a 3x3
+// block reaching two tiles ahead of the camera (DGROUP 0x332 offset table),
+// far to near; level 4 covers everything. Emulated as a radius per level.
+const TILE = { 1: 0x1000, 2: 0x4000, 3: 0x10000, 4: 0x40000 };
+const RANGE_TILES = 2.5;
+const levelRange = { 1: { value: 0 }, 2: { value: 0 }, 3: { value: 0 }, 4: { value: 0 } };
+function setEngineRanges(on) {
+  for (const l of [1, 2, 3]) levelRange[l].value = on ? TILE[l] * RANGE_TILES : 0;
+}
+setEngineRanges(true);
+
+// Patch a material: cull by distance from the camera (per instance for
+// instanced meshes), and optionally shade ground dots like the engine
+// (white near, EGA 7 beyond 0x9C4, EGA 8 beyond 0x1388; linear-space values).
+function patchMaterial(mat, range, dots) {
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uRange = range;
+    sh.vertexShader = sh.vertexShader
+      .replace("void main() {", "uniform float uRange;\nvarying float vDist;\nvoid main() {")
+      .replace("#include <project_vertex>", `#include <project_vertex>
+        #ifdef USE_INSTANCING
+          vec3 origin = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+        #else
+          vec3 origin = (modelMatrix * vec4(transformed, 1.0)).xyz;
+        #endif
+        vDist = distance((modelMatrix * vec4(transformed, 1.0)).xyz, cameraPosition);
+        if (uRange > 0.0 && distance(origin.xz, cameraPosition.xz) > uRange) gl_Position = vec4(0.0, 0.0, 2.0, 1.0);`);
+    sh.fragmentShader = sh.fragmentShader
+      .replace("void main() {", "varying float vDist;\nvoid main() {")
+      .replace("#include <color_fragment>", `#include <color_fragment>
+        ${dots ? "diffuseColor.rgb = vDist < 2500.0 ? vec3(1.0) : vDist < 5000.0 ? vec3(0.402) : vec3(0.0908);" : ""}`);
+  };
+  mat.customProgramCacheKey = () => "range" + (dots ? "-dots" : "");
+}
+
+let dotMaterials = 0;
+function buildTerrain(gltf) {
+  const root = new THREE.Group();
+  for (const levelNode of gltf.scene.children[0].children) {
+    const level = +levelNode.name.replace("level", "");
+    const group = new THREE.Group();
+    group.name = levelNode.name;
+    // GLTFLoader clones a shared glTF mesh per node but shares its geometry,
+    // so group placed primitives by geometry.
+    const byPrim = new Map();     // geometry uuid -> { proto, matrices }
+    gltf.scene.updateMatrixWorld(true);
+    for (const inst of levelNode.children) {
+      inst.traverse((o) => {
+        if (!o.geometry) return;
+        const key = o.geometry.uuid;
+        // Primitive index within its shape = position in the engine's draw order.
+        const order = o === inst ? 0 : inst.children.indexOf(o);
+        if (!byPrim.has(key)) byPrim.set(key, { proto: o, order, matrices: [] });
+        byPrim.get(key).matrices.push(o.matrixWorld.clone());
+      });
+    }
+    for (const { proto, order, matrices } of byPrim.values()) {
+      const g = proto.geometry;
+      g.computeBoundingBox();
+      const flat = g.boundingBox.max.y - g.boundingBox.min.y < 1e-3;
+      const mat = proto.material.clone();
+      const kind = proto.isPoints ? 2 : proto.isLineSegments ? 1 : 0;
+      let obj;
+      if (kind === 0) {
+        obj = new THREE.InstancedMesh(g, mat, matrices.length);
+        matrices.forEach((m, i) => obj.setMatrixAt(i, m));
+        obj.instanceMatrix.needsUpdate = true;
+        obj.computeBoundingSphere();
+      } else {
+        // Lines/points are not instanceable in core three.js; bake them.
+        const merged = [];
+        const pos = g.attributes.position, idx = g.index;
+        const v = new THREE.Vector3();
+        for (const m of matrices) {
+          for (let k = 0; k < idx.count; k++) {
+            v.fromBufferAttribute(pos, idx.getX(k)).applyMatrix4(m);
+            merged.push(v.x, v.y, v.z);
+          }
+        }
+        const bg = new THREE.BufferGeometry();
+        bg.setAttribute("position", new THREE.Float32BufferAttribute(merged, 3));
+        obj = kind === 1 ? new THREE.LineSegments(bg, mat) : new THREE.Points(bg, mat);
+        if (kind === 2) mat.size = 2, mat.sizeAttenuation = false;
+      }
+      // Ground dots ("3E" bodies, mesh extras kind = "lights") get the
+      // engine's distance shading.
+      const dots = kind === 2 && (proto.userData.kind || proto.parent?.userData.kind) === "lights";
+      if (dots) dotMaterials++;
+      patchMaterial(mat, levelRange[level], dots);
+      obj.frustumCulled = false;
+      if (flat) {
+        mat.depthWrite = false;
+        obj.renderOrder = (4 - level) * 1000 + order;
+      } else {
+        obj.renderOrder = 10000;
+      }
+      group.add(obj);
+    }
+    levelGroups[level] = group;
+    root.add(group);
+  }
+  return root;
+}
+
+async function showTerrain() {
+  mode = "terrain";
+  $("shapeControls").hidden = true;
+  $("terrainControls").hidden = false;
+  $("help").textContent = "Drag to orbit, right-drag to pan, scroll to zoom. North is up the screen at the start (−Z). " +
+    "With engine draw distances on, finer levels only appear near the camera: zoom in close to see them.";
+  status("Loading terrain…");
+  const gltf = await loadGlb("NC_terrain");
+  if (!terrainRoot) {
+    status("Building instances…");
+    await new Promise((r) => setTimeout(r));
+    terrainRoot = buildTerrain(gltf);
+    $("levels").innerHTML = [4, 3, 2, 1].map((l) =>
+      `<label class="check"><input type="checkbox" data-level="${l}" checked> Level ${l}` +
+      ` (${l === 4 ? "base" : l === 1 ? "finest" : "detail"})</label>`).join("");
+    $("levels").onchange = (e) => (levelGroups[e.target.dataset.level].visible = e.target.checked);
+    $("ranges").onchange = (e) => setEngineRanges(e.target.checked);
+  }
+  scene.background = new THREE.Color(0x6f8fb8);
+  setContent(terrainRoot);
+  let draws = 0, instances = 0;
+  terrainRoot.traverse((o) => { if (o.isMesh || o.isLine || o.isPoints) draws++; if (o.isInstancedMesh) instances += o.count; });
+  // World: 16 level-3 tiles of 0x10000 → 0..1048576 on X and 0..-1048576 on Z.
+  const W = 16 * 0x10000;
+  orbit.target.set(W / 2, 0, -W / 2);
+  camera.position.set(W / 2, W * 0.55, W * 0.15);
+  camera.near = 50; camera.far = 2e7;
+  camera.updateProjectionMatrix();
+  $("info").textContent = `draw calls  ${draws}\ninstances   ${instances}\nground-dot  ${dotMaterials} batch(es)\n` +
+    `world       ${W} units square`;
+  status("");
+}
+
+$("file").onchange = (e) => (e.target.value === "NC_terrain" ? showTerrain() : showShapes(e.target.value));
+addEventListener("keydown", (e) => {
+  if (mode !== "shapes" || e.target.tagName === "SELECT") return;
+  if (e.key === "ArrowLeft") selectShape(+$("shape").value - 1);
+  if (e.key === "ArrowRight") selectShape(+$("shape").value + 1);
+});
+
+function frame() {
+  orbit.update();
+  renderer.render(scene, camera);
+}
+renderer.setAnimationLoop(frame);
+
+// ---------- Self-test: render fixed views and POST them to the dev server ----------
+async function selftest() {
+  const report = { ok: true, errors: [], shots: [] };
+  const shot = async (name) => {
+    for (let i = 0; i < 3; i++) await new Promise((r) => requestAnimationFrame(r));
+    frame();
+    const png = renderer.domElement.toDataURL("image/png");
+    await fetch("/report/" + name + ".png", { method: "POST", body: png });
+    report.shots.push(name);
+  };
+  try {
+    for (const [file, idx] of [["STFLT", 6], ["PHOTO", 0], ["NC", 47]]) {
+      $("file").value = file;
+      await showShapes(file);
+      selectShape(idx);
+      await shot(`${file}_${idx}`);
+    }
+    $("file").value = "NC_terrain";
+    await showTerrain();
+    report.terrain = $("info").textContent;
+    await shot("terrain");
+    for (const only of [4, 3, 2, 1]) {
+      for (const l of [4, 3, 2, 1]) levelGroups[l].visible = l === only;
+      await shot(`terrain_only_L${only}`);
+    }
+    for (const l of [4, 3, 2, 1]) levelGroups[l].visible = true;
+    camera.position.set(400000, 30000, -500000);
+    orbit.target.set(600000, 0, -650000);
+    await shot("terrain_low");
+    camera.position.set(330000, 1200, -420000);
+    orbit.target.set(345000, 0, -440000);
+    await shot("terrain_ground");
+    setEngineRanges(false);
+    await shot("terrain_ground_allranges");
+    setEngineRanges(true);
+  } catch (err) {
+    report.ok = false;
+    report.errors.push(String(err && err.stack || err));
+  }
+  report.webgl = renderer.getContext().getParameter(renderer.getContext().VERSION);
+  await fetch("/report/report.json", { method: "POST", body: JSON.stringify(report, null, 2) });
+}
+addEventListener("error", (e) => fetch("/report/error.txt", { method: "POST", body: String(e.message) }));
+
+if (SELFTEST) selftest();
+else showShapes("STFLT");
+</script>
+</body>
+</html>

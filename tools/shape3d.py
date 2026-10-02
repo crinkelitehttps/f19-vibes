@@ -81,10 +81,13 @@ def parse_body(d, pos):
         body.end = r.p
         return body
     if t == 0x3E:
-        # Light points from the shared table: [3E][colour][n][index * n].
+        # Ground dots from the shared table: [3E][xx][n][index * n]. The engine
+        # skips xx and shades each dot by distance: white near, then EGA 7,
+        # then 8 (camera depth > 0x9C4 / > 0x1388). Base colour is 15.
         r.u8()
         body.kind = "lights"
-        colour, n = r.u8(), r.u8()
+        r.u8()
+        colour, n = 15, r.u8()
         body.shared_vertices = True
         body.vertices = [(0, r.u8()) for _ in range(n)]
         body.prims = [("lights", colour)]
