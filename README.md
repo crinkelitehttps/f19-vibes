@@ -40,3 +40,15 @@ only near the camera). `/viewer/?selftest` renders fixed views and writes
 screenshots plus `report.json` to `out/viewer_report/`; run it headless with
 `firefox --headless --no-remote --profile <tmpdir> "http://localhost:8019/viewer/?selftest"`.
 Three.js is loaded from the jsDelivr CDN.
+
+## Running the game
+
+```
+tools/run_f19.sh            # full game
+tools/run_f19.sh demo       # the demo
+tools/run_f19.sh full --fresh   # reset the run copy (roster, saves)
+```
+
+Runs DOSBox from a disposable copy in `out/run/<which>/`. Ctrl+F5
+screenshot, Ctrl+Alt+F5 record video (to `out/run/capture/`),
+Ctrl+F11/F12 slower/faster, Ctrl+F10 release the mouse.
