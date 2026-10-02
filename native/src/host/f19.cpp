@@ -1,7 +1,7 @@
 // F-19 native host (SDL3): runs the original game in the interpreter and
 // presents mode 13h / text mode in a window.
 //
-// Usage: f19 [GAMEDIR] [--scale N] [--mips N] [--trace]
+// Usage: f19 [GAMEDIR] [--scale N] [--mips N] [--trace] [--original-driver] [--verify-driver]
 //   GAMEDIR defaults to the current directory; it must be writable (the
 //   game saves its roster there). Use a copy of the original files.
 #include <SDL3/SDL.h>
@@ -16,6 +16,7 @@
 
 #include "core/dos.h"
 #include "core/machine.h"
+#include "drivers/mgraphic.h"
 
 using namespace f19;
 
@@ -148,11 +149,13 @@ int main(int argc, char** argv) {
     std::string dir = ".";
     int scale = 4;
     double mips = 4.0;
-    bool trace = false;
+    bool trace = false, original_driver = false, verify_driver = false;
     for (int i = 1; i < argc; i++) {
         if (!std::strcmp(argv[i], "--scale") && i + 1 < argc) scale = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--mips") && i + 1 < argc) mips = std::atof(argv[++i]);
         else if (!std::strcmp(argv[i], "--trace")) trace = true;
+        else if (!std::strcmp(argv[i], "--original-driver")) original_driver = true;
+        else if (!std::strcmp(argv[i], "--verify-driver")) verify_driver = true;
         else dir = argv[i];
     }
 
@@ -163,10 +166,15 @@ int main(int argc, char** argv) {
     Machine m(dir);
     m.trace = trace;
     m.ips_per_ms = uint32_t(mips * 1000);
+    // Native replacement for MGRAPHIC.EXE (verify mode checks every call
+    // against the original and reports at exit).
+    MGraphicNative native_gfx(m);
+    native_gfx.enabled = !original_driver;
+    native_gfx.verify = verify_driver;
     if (!m.dos->start_program("F19.COM", "")) {
         std::fprintf(stderr,
                      "cannot start F19.COM in '%s'\n"
-                     "usage: f19 GAMEDIR [--scale N] [--mips N] [--trace]\n"
+                     "usage: f19 GAMEDIR [--scale N] [--mips N] [--trace] [--original-driver] [--verify-driver]\n"
                      "GAMEDIR is a writable copy of the game files, e.g.:\n"
                      "  mkdir -p out/run/native && cp fullgame/* out/run/native/ && chmod -R u+w out/run/native\n"
                      "  build/native/f19 out/run/native\n",
@@ -259,6 +267,7 @@ int main(int argc, char** argv) {
         SDL_RenderPresent(ren);
     }
     if (m.exited) std::fprintf(stderr, "stopped: %s\n", m.stop_reason.c_str());
+    if (verify_driver) std::fprintf(stderr, "%s", native_gfx.report().c_str());
     SDL_Quit();
     return 0;
 }

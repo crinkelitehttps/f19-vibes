@@ -300,6 +300,28 @@ void Machine::log(const char* fmt, ...) {
     va_end(ap);
 }
 
+void Machine::add_breakpoint(uint32_t linear, BreakHandler h) {
+    if (cpu.breakpoints.empty()) {
+        cpu.breakpoints.assign(Memory::kSize, 0);
+        cpu.on_breakpoint = [this](uint32_t lin) {
+            if (breakpoints_suspended) return;
+            auto it = break_handlers_.find(lin);
+            if (it == break_handlers_.end()) return;
+            for (auto& fn : it->second)
+                if (fn()) return;
+        };
+    }
+    cpu.breakpoints[linear & (Memory::kSize - 1)] = 1;
+    break_handlers_[linear].push_back(std::move(h));
+}
+
+void Machine::clear_breakpoints_in(uint32_t lo, uint32_t hi) {
+    for (auto it = break_handlers_.lower_bound(lo); it != break_handlers_.end() && it->first < hi;) {
+        cpu.breakpoints[it->first] = 0;
+        it = break_handlers_.erase(it);
+    }
+}
+
 uint16_t Machine::register_callback(Callback cb, std::string name) {
     callbacks_.push_back({std::move(cb), std::move(name)});
     return uint16_t(callbacks_.size() - 1);

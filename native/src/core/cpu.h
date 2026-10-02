@@ -27,7 +27,13 @@ public:
 
     static uint32_t linear(uint16_t seg, uint16_t off) { return ((uint32_t(seg) << 4) + off) & (kSize - 1); }
     uint8_t read8(uint32_t a) const { return bytes_[a & (kSize - 1)]; }
-    void write8(uint32_t a, uint8_t v) { bytes_[a & (kSize - 1)] = v; }
+    void write8(uint32_t a, uint8_t v) {
+        a &= kSize - 1;
+        if (journal) journal->emplace_back(a, bytes_[a]);
+        bytes_[a] = v;
+    }
+    // When set, every write appends (address, previous value).
+    std::vector<std::pair<uint32_t, uint8_t>>* journal = nullptr;
     // Word access within a segment wraps the offset at 64K, as on the 8086.
     uint16_t read16(uint16_t seg, uint16_t off) const {
         return read8(linear(seg, off)) | (read8(linear(seg, uint16_t(off + 1))) << 8);
@@ -73,6 +79,13 @@ public:
     std::function<void(uint16_t id)> on_callback;
     // Called on an opcode the interpreter does not implement; default throws.
     std::function<void(const std::string& what)> on_unimplemented;
+
+    // Execution breakpoints: when `breakpoints` is non-empty and the byte for
+    // the linear address of CS:IP is non-zero, `on_breakpoint` runs before
+    // the instruction. If it changes CS:IP, the instruction is skipped
+    // (lets native code replace a routine: it can emulate RETF).
+    std::vector<uint8_t> breakpoints;
+    std::function<void(uint32_t linear)> on_breakpoint;
 
     // Execute one instruction (including its prefixes, and a whole REP loop).
     void step();

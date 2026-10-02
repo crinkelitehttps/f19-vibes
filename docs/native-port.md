@@ -56,6 +56,58 @@ All full-game stages (`START`, `EGAME`, `END`, `DS`) have the same stub
 layout. **No stage writes video memory (A000) itself** — only the graphics
 drivers do — so a native driver can own all drawing.
 
+### MGRAPHIC slot map (reverse engineered; native in `native/src/drivers/mgraphic.cpp`)
+
+Driver data segment D = load segment; code segment C = relocated header
+word +0x18. State: `C:019C` draw segment, `C:019E` origin offset,
+`C:01A0` flip flag, `C:000C` row-offset table (200 words), `C:067F` page
+table (page 0 = A000), `D:1B6E..1B78` line state, `D:1B7A` colour,
+`D:1C44..1C50` text state. Fonts: `D:00E2` width-table ptrs, `D:00EE`
+glyph-data ptrs, `D:0106` fixed width (FF = proportional), `D:00FA`
+heights, `D:0112` row offsets. "reg" = register-call entry.
+
+| Slot | Function |
+|---|---|
+| 0 | page memory: arg 0 -> page 0 seg; else DOS-allocate a 64000-byte page |
+| 1, 2, 3, 4, 6 | text (reg: BX string, BP param block): vertical / left / right / no / all clipping |
+| 5, 7, 8, 10, 9 | text wrappers (stack: param block, string) for 4, 1, 2, 3, 6 |
+| 11 | vertical bar gauge (reg) |
+| 12 / 13 / 14 | draw target = page 1 / page AX / page arg |
+| 15 / 16 | set / get draw segment (reg AX) |
+| 17,73 / 18,74 | sprite blit, colour 0 transparent (stack ptr / reg BP param block) |
+| 19,71 / 20,72 | clipped sprite blit (stack ptr / reg BP) |
+| 21, 22, 34, 35, 53-55, 61, 80-83 | no-ops |
+| 23, 49, 66, 67, 76-78 | constants (FA00, FA00, 0, 1, 1, 1, 0) |
+| 24,25 / 26 / 27 / 30 | origin = 0 / arg / AX / get |
+| 28 / 29 / 63 | constants 5580 / 1950 / 3 |
+| 31 | line AX,BX -> CX,DX (reg), current colour |
+| 32 / 33 | colour = AH / arg |
+| 36 | plot current point |
+| 37, 40 | polygon spans rows AX..CX, SS:BX left / +1B8 right tables |
+| 38,64 / 39,65 | set D:00CC / D:00CE (reg / arg) |
+| 41 | replace colour in rectangle |
+| 42 | copy rectangle between pages |
+| 43 / 59 | clear screen A000 / clear ES (64000 bytes) |
+| 44 | flip: copy page 1 -> page 0, set flip flag |
+| 45 | get flip flag |
+| 46 | palette flicker (9 DAC entries) + CRTC start-address screen shake |
+| 47 | character width (font, char) |
+| 48 | copy 64000 bytes from segment arg to draw segment |
+| 50 | largest free DOS block |
+| 51, 52 | copy 320 bytes SS:BP -> ES:DI |
+| 56 / 57, 75 / 58 / 62 | ES = page[SI] / set page entry / AX = row[DI] / AX = row[y]+x |
+| 60 | set mode 13h (exit with message on failure) |
+| 68 | set 16-colour palette set via INT 10h/1012h |
+| 69 / 70 | screen off / on at vertical retrace |
+| 79 | set screen-shake counter |
+
+Status: all slots except 0, 50, 60, 68 (DOS/BIOS calls; still original
+code) are native. Verified against the original on every call through the
+self-running demo flight: 788,936 calls, 0 mismatches (memory written and
+all registers; free stack space below SP excluded). Slots 7-10 and some
+blit variants are only exercised by the menus: run
+`f19 GAMEDIR --verify-driver` and read the report on exit.
+
 ### DOS/BIOS/hardware surface (static census; to be confirmed by tracing)
 
 - INT 21h: 09 0B 0E 19 1A 25 2A 2C 30 35 3C 3D 3E 3F 40 41 42 43 44 48 49

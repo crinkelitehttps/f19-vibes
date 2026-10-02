@@ -300,6 +300,7 @@ void Dos::exec(uint8_t mode) {
         uint16_t load_seg = mem.read16(pb_seg, pb_off), reloc = mem.read16(pb_seg, uint16_t(pb_off + 2));
         m_.log("DOS load overlay %s at %04X reloc %04X\n", name.c_str(), load_seg, reloc);
         load_image(file, is_exe, load_seg, reloc, nullptr, nullptr, nullptr, nullptr);
+        m_.notify_overlay_loaded(upper(name), load_seg);
         return ok();
     }
     if (mode != 0) {

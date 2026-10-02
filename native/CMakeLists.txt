@@ -14,6 +14,7 @@ add_library(f19core STATIC
   src/core/cpu.cpp
   src/core/machine.cpp
   src/core/dos.cpp
+  src/drivers/mgraphic.cpp
 )
 target_include_directories(f19core PUBLIC src)
 

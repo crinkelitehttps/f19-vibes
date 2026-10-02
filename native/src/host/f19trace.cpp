@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <map>
+#include <memory>
 #include <vector>
 #include <cstdio>
 #include <cstdlib>
@@ -14,6 +15,7 @@
 
 #include "core/dos.h"
 #include "core/machine.h"
+#include "drivers/mgraphic.h"
 
 using namespace f19;
 
@@ -49,18 +51,61 @@ int main(int argc, char** argv) {
     }
     std::string program = "F19.COM", args, shot, keys;
     double millions = 50;
-    bool trace = false, prof = false;
+    bool trace = false, prof = false, drv_trace = false, native_drv = false, verify_drv = false;
     for (int i = 2; i < argc; i++) {
         if (!std::strcmp(argv[i], "-p") && i + 1 < argc) program = argv[++i];
         else if (!std::strcmp(argv[i], "-a") && i + 1 < argc) args = argv[++i];
         else if (!std::strcmp(argv[i], "-n") && i + 1 < argc) millions = std::atof(argv[++i]);
         else if (!std::strcmp(argv[i], "-t")) trace = true;
         else if (!std::strcmp(argv[i], "-P")) prof = true;
+        else if (!std::strcmp(argv[i], "-D")) drv_trace = true;
+        else if (!std::strcmp(argv[i], "-N")) native_drv = true;
+        else if (!std::strcmp(argv[i], "-V")) native_drv = verify_drv = true;
         else if (!std::strcmp(argv[i], "-s") && i + 1 < argc) shot = argv[++i];
         else if (!std::strcmp(argv[i], "-k") && i + 1 < argc) keys = argv[++i];
     }
     Machine m(argv[1]);
     m.trace = trace;
+
+    // -D: trace calls into the graphics driver's exported entry points.
+    struct EntryStats { std::vector<int> slots; uint64_t calls = 0; std::map<uint32_t, uint64_t> callers; std::vector<std::string> samples; };
+    std::map<uint32_t, EntryStats> entries;
+    auto record = [&](uint32_t lin) {
+        auto& e = entries[lin];
+        e.calls++;
+        uint16_t ss = m.cpu.regs.s[SS], sp = m.cpu.regs.r[SP];
+        uint16_t rip = m.mem.read16(ss, sp), rcs = m.mem.read16(ss, uint16_t(sp + 2));
+        e.callers[(uint32_t(rcs) << 16) | rip]++;
+        if (e.samples.size() < 4) {
+            char b[160];
+            std::snprintf(b, sizeof b, "args %04X %04X %04X %04X %04X %04X  AX=%04X BX=%04X CX=%04X DX=%04X SI=%04X DI=%04X ES=%04X",
+                          m.mem.read16(ss, uint16_t(sp + 4)), m.mem.read16(ss, uint16_t(sp + 6)), m.mem.read16(ss, uint16_t(sp + 8)),
+                          m.mem.read16(ss, uint16_t(sp + 10)), m.mem.read16(ss, uint16_t(sp + 12)), m.mem.read16(ss, uint16_t(sp + 14)),
+                          m.cpu.regs.r[AX], m.cpu.regs.r[BX], m.cpu.regs.r[CX], m.cpu.regs.r[DX], m.cpu.regs.r[SI], m.cpu.regs.r[DI], m.cpu.regs.s[ES]);
+            if (std::find(e.samples.begin(), e.samples.end(), b) == e.samples.end()) e.samples.push_back(b);
+        }
+    };
+    if (drv_trace) {
+        m.overlay_listeners.push_back([&](const std::string& name, uint16_t seg) {
+            if (name.find("GRAPHIC") == std::string::npos) return;
+            uint16_t adj = m.mem.read16(seg, 0x18), n = m.mem.read16(seg, 0x22);
+            uint8_t first = m.mem.read8(Memory::linear(seg, 0x1C));
+            entries.clear();
+            for (int i = 0; i < n; i++) {
+                uint16_t off = m.mem.read16(seg, uint16_t(0x24 + 2 * i));
+                uint32_t lin = Memory::linear(adj, off);   // +0x18 is relocated at load: already a segment
+                if (entries[lin].slots.empty())
+                    m.add_breakpoint(lin, [&record, lin] { record(lin); return false; });
+                entries[lin].slots.push_back(first + i);
+            }
+            std::fprintf(stderr, "driver %s at %04X: %u entries\n", name.c_str(), seg, n);
+        });
+    }
+    std::unique_ptr<MGraphicNative> gfx;
+    if (native_drv) {
+        gfx = std::make_unique<MGraphicNative>(m);
+        gfx->verify = verify_drv;
+    }
     if (!m.dos->start_program(program, args)) {
         std::fprintf(stderr, "cannot start %s\n", program.c_str());
         return 1;
@@ -84,6 +129,19 @@ int main(int argc, char** argv) {
                  m.stop_reason.empty() ? "budget reached" : m.stop_reason.c_str());
     std::fprintf(stderr, "CPU at %04X:%04X\n", m.cpu.regs.s[CS], m.cpu.regs.ip);
     if (!shot.empty()) screenshot(m, shot.c_str());
+    if (gfx) std::fprintf(stderr, "%s", gfx->report().c_str());
+    if (drv_trace) {
+        std::vector<std::pair<uint64_t, uint32_t>> order;
+        for (auto& [lin, e] : entries) order.emplace_back(e.calls, lin);
+        std::sort(order.rbegin(), order.rend());
+        for (auto [calls, lin] : order) {
+            auto& e = entries[lin];
+            std::string slots;
+            for (int s2 : e.slots) slots += (slots.empty() ? "" : ",") + std::to_string(s2);
+            std::fprintf(stderr, "slot %-6s lin %05X calls %8llu callers %zu\n", slots.c_str(), lin, (unsigned long long)calls, e.callers.size());
+            for (auto& smp : e.samples) std::fprintf(stderr, "        %s\n", smp.c_str());
+        }
+    }
     if (prof) {
         std::vector<std::pair<uint64_t, uint32_t>> top;
         for (auto [k2, n] : profile) top.emplace_back(n, k2);

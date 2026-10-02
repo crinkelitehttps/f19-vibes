@@ -60,6 +60,22 @@ public:
     // Text mode (B800) as a printable string, for headless bring-up.
     std::string text_screen();
     std::function<void(uint8_t mode)> on_mode_set;
+    // Overlay-load listeners (EXEC 4B03), e.g. for drivers.
+    std::vector<std::function<void(const std::string& name, uint16_t seg)>> overlay_listeners;
+    void notify_overlay_loaded(const std::string& name, uint16_t seg) {
+        for (auto& f : overlay_listeners) f(name, seg);
+    }
+
+    // Execution breakpoints shared by tools and native replacements. A
+    // handler returns true if it took over (changed CS:IP, e.g. emulated
+    // RETF). Handlers for one address run in registration order until one
+    // returns true.
+    using BreakHandler = std::function<bool()>;
+    void add_breakpoint(uint32_t linear, BreakHandler h);
+    void clear_breakpoints_in(uint32_t lo, uint32_t hi);  // [lo, hi)
+    // While set, breakpoints are ignored (e.g. while a verifier runs the
+    // original code).
+    bool breakpoints_suspended = false;
     // Keyboard: host pushes (scan, ascii); BIOS INT 16h consumes.
     // Keyboard. key_event queues one raw scan-code byte (set 1, with 0x80 for
     // release, 0xE0 prefixes as sent by a 101-key keyboard); each is
@@ -112,6 +128,7 @@ private:
     uint64_t tick_period_us() const { return uint64_t(pit_reload_ ? pit_reload_ : 65536) * 1000000 / 1193182; }
     void service_timer();
 
+    std::map<uint32_t, std::vector<BreakHandler>> break_handlers_;
     std::map<uint32_t, bool> unknown_ports_logged_;   // key: port | 0x10000 for OUT
     void setup_ports();
     void int10();

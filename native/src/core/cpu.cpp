@@ -433,6 +433,14 @@ void Cpu::string_op(uint8_t op) {
 
 void Cpu::step() {
     if (halted) return;
+    if (!breakpoints.empty()) {
+        uint32_t lin = Memory::linear(regs.s[CS], regs.ip);
+        if (breakpoints[lin]) {
+            uint16_t cs = regs.s[CS], ip = regs.ip;
+            on_breakpoint(lin);
+            if (cs != regs.s[CS] || ip != regs.ip) return;
+        }
+    }
     instructions++;
     seg_override_ = -1;
     rep_ = 0;
