@@ -1,6 +1,10 @@
 // F-19 native host (SDL3): runs the original game in the interpreter and
 // presents mode 13h / text mode in a window.
 //
+// F12 saves a screenshot (BMP) in the current directory, plus debug data
+// for the high-resolution renderer (captured primitives, the engine's own
+// 320x200 frame).
+//
 // Usage: f19 [GAMEDIR] [--scale N] [--mips N] [--msaa N] [--trace] [--original-driver] [--verify-driver] [--lowres]
 //   The 3D world is rendered at the window's resolution unless --lowres
 //   (needs the native driver).
@@ -10,6 +14,7 @@
 #include <zlib.h>
 
 #include <algorithm>
+#include <ctime>
 #include <cctype>
 #include <cstdio>
 #include <cstring>
@@ -147,6 +152,42 @@ uint8_t fkey_scan(uint8_t scan, bool shift, bool ctrl, bool alt) {
     return scan;
 }
 
+void save_bmp(const std::string& path, const uint8_t* rgb, int w, int h) {
+    SDL_Surface* s = SDL_CreateSurfaceFrom(w, h, SDL_PIXELFORMAT_RGB24, const_cast<uint8_t*>(rgb), w * 3);
+    if (s) {
+        SDL_SaveBMP(s, path.c_str());
+        SDL_DestroySurface(s);
+    }
+}
+
+void save_screenshot(GlRenderer& r, int w, int h, const HiresFrame* frame) {
+    char stamp[64];
+    std::time_t t = std::time(nullptr);
+    std::strftime(stamp, sizeof stamp, "f19-%Y%m%d-%H%M%S", std::localtime(&t));
+    std::string base = stamp;
+    auto px = r.read_window(w, h);
+    save_bmp(base + ".bmp", px.data(), w, h);
+    if (frame) {
+        // The engine's own 320x200 frame and the captured primitives.
+        std::vector<uint8_t> page(64000 * 3);
+        for (int i = 0; i < 64000; i++)
+            for (int k = 0; k < 3; k++) page[i * 3 + k] = uint8_t(frame->dac[frame->page[i]][k] * 255 / 63);
+        save_bmp(base + "-engine.bmp", page.data(), 320, 200);
+        if (FILE* f = std::fopen((base + "-prims.txt").c_str(), "w")) {
+            for (auto& p : frame->prims) {
+                std::fprintf(f, "%d obj %u col %3d c2 %3d cx %.1f cy %.1f zdiv %.3f vp %.0fx%.0f org %.0f,%.0f", p.kind, p.object,
+                             p.color, p.color2, p.proj.cx, p.proj.cy, p.proj.zdiv, p.proj.vp_w, p.proj.vp_h, p.proj.ox, p.proj.oy);
+                if (p.kind == HiresPrim::Horizon)
+                    std::fprintf(f, " M %.2f,%.2f U %.4f,%.4f uniform %d skyonly %d", p.hx, p.hy, p.ux, p.uy, p.uniform, p.sky_only);
+                for (auto& v : p.v) std::fprintf(f, " (%.0f %.0f %.0f)", v[0], v[1], v[2]);
+                std::fprintf(f, "\n");
+            }
+            std::fclose(f);
+        }
+    }
+    std::fprintf(stderr, "screenshot: %s.bmp\n", base.c_str());
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -222,12 +263,18 @@ int main(int argc, char** argv) {
     int hires_w = 0, hires_h = 0;
     std::vector<uint32_t> screen(640 * 400);
 
+    bool want_screenshot = false;
     uint64_t last = SDL_GetTicksNS();
     bool running = true;
     while (running && !m.exited) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_EVENT_QUIT) running = false;
+            if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.scancode == SDL_SCANCODE_F12 && !ev.key.repeat) {
+                want_screenshot = true;
+                continue;
+            }
+            if (ev.type == SDL_EVENT_KEY_UP && ev.key.scancode == SDL_SCANCODE_F12) continue;
             if (ev.type == SDL_EVENT_KEY_DOWN || ev.type == SDL_EVENT_KEY_UP) {
                 // Raw make/break codes go through port 60h + IRQ1 so the
                 // game's own keyboard handler sees held keys; the BIOS
@@ -300,6 +347,10 @@ int main(int argc, char** argv) {
             shown_frame = nullptr;
         }
         renderer.present(tex, ow, oh, vx, vy, float(vw), float(vh));
+        if (want_screenshot) {
+            want_screenshot = false;
+            save_screenshot(renderer, ow, oh, use_hires ? frame.get() : nullptr);
+        }
         SDL_GL_SwapWindow(win);
     }
     if (m.exited) std::fprintf(stderr, "stopped: %s\n", m.stop_reason.c_str());

@@ -32,6 +32,8 @@ public:
     // Draw `tex` into the window's default framebuffer at `rect` (pixels,
     // top-left origin); clears the rest to black.
     void present(GLuint tex, int win_w, int win_h, float x, float y, float w, float h);
+    // Read the window's default framebuffer (RGB, top row first).
+    std::vector<uint8_t> read_window(int w, int h);
     // Read back a texture produced by render_frame (RGB, top row first).
     std::vector<uint8_t> read_rgb(GLuint tex, int w, int h);
 

@@ -303,8 +303,10 @@ void WorldCapture::capture_horizon() {
         if (ds8(zoom_)) d *= 0.5f;
         p.hx = p.proj.cx - d * s;
         p.hy = p.proj.cy - 0.75f * d * c;
-        p.ux = -s;
-        p.uy = -0.75f * c;
+        // Sky side: the normal to the line direction (c, -0.75 s) that
+        // points up the screen when level.
+        p.ux = -0.75f * s;
+        p.uy = -c;
     }
     prims_.push_back(std::move(p));
 }

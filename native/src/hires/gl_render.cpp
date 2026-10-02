@@ -428,6 +428,15 @@ void GlRenderer::present(GLuint tex, int win_w, int win_h, float x, float y, flo
     draw_textured(tex, x0, y0, x1, y1);
 }
 
+std::vector<uint8_t> GlRenderer::read_window(int w, int h) {
+    std::vector<uint8_t> px(size_t(w) * h * 3), out(px.size());
+    BindFramebuffer(GL_FRAMEBUFFER, 0);
+    PixelStorei(GL_PACK_ALIGNMENT, 1);
+    ReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, px.data());
+    for (int y = 0; y < h; y++) std::copy_n(&px[size_t(h - 1 - y) * w * 3], w * 3, &out[size_t(y) * w * 3]);
+    return out;
+}
+
 std::vector<uint8_t> GlRenderer::read_rgb(GLuint tex, int w, int h) {
     std::vector<uint8_t> px(size_t(w) * h * 3);
     if (tex != out_tex_) return px;
