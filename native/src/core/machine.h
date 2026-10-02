@@ -55,8 +55,17 @@ public:
 
     // VGA DAC (6-bit RGB per entry) - used by the emulated-hardware path.
     uint8_t dac[256][3] = {};
+    // Text mode (B800) as a printable string, for headless bring-up.
+    std::string text_screen();
+    std::function<void(uint8_t mode)> on_mode_set;
     // Keyboard: host pushes (scan, ascii); BIOS INT 16h consumes.
     void key_press(uint8_t scan, uint8_t ascii);
+    // Take the next key from the BIOS buffer (ascii | scan << 8), if any.
+    bool key_pop(uint16_t* key);
+    bool key_available() const;
+    // Inside a native interrupt handler: make the INT re-execute later
+    // (blocking calls), letting timer interrupts run meanwhile.
+    void block_and_retry();
 
     // Run until `budget` instructions have executed or the program exits.
     void run(uint64_t budget);
@@ -83,6 +92,9 @@ private:
 
     std::map<uint32_t, bool> unknown_ports_logged_;   // key: port | 0x10000 for OUT
     void setup_ports();
+    void int10();
+    void text_put(uint8_t ch, uint8_t attr, bool use_attr);
+    void text_scroll(int lines, uint8_t attr, int top, int left, int bottom, int right, bool up);
 };
 
 }  // namespace f19

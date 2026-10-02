@@ -84,54 +84,23 @@ Machine::Machine(std::filesystem::path game_dir) {
     hook_interrupt(0x11, [this] { cpu.regs.r[AX] = mem.read16(kBda, kEquipment); }, "int11");
     hook_interrupt(0x12, [this] { cpu.regs.r[AX] = 640; }, "int12");
 
-    // INT 10h video (minimal; drivers do the real work).
-    hook_interrupt(0x10, [this] {
-        uint8_t ah = cpu.regs.r8(4), al = cpu.regs.r8(0);
-        switch (ah) {
-            case 0x00:
-                log("INT 10 set mode %02X\n", al);
-                mem.write8(Memory::linear(kBda, kVideoMode), al & 0x7F);
-                break;
-            case 0x0F:
-                cpu.regs.r8(0) = mem.read8(Memory::linear(kBda, kVideoMode));
-                cpu.regs.r8(4) = 80;
-                cpu.regs.r8(7) = 0;
-                break;
-            case 0x1A:  // display combination: VGA colour
-                if (al == 0) { cpu.regs.r8(0) = 0x1A; cpu.regs.r[BX] = 0x0008; }
-                break;
-            case 0x12:  // EGA info: 256K, colour
-                if (cpu.regs.r8(3) == 0x10) { cpu.regs.r[BX] = 0x0003; cpu.regs.r[CX] = 0x0009; }
-                break;
-            case 0x0E: case 0x09: case 0x0A:
-                log("INT 10 char %02X '%c'\n", al, al >= 32 && al < 127 ? al : '.');
-                break;
-            default:
-                log("INT 10 AH=%02X AL=%02X\n", ah, al);
-                break;
-        }
-    }, "int10");
+    // INT 10h video: text mode on B800 (setup screens), mode bookkeeping for
+    // graphics (drivers do the drawing).
+    hook_interrupt(0x10, [this] { int10(); }, "int10");
 
     // INT 16h keyboard via the BDA ring buffer.
     hook_interrupt(0x16, [this] {
         uint8_t ah = cpu.regs.r8(4);
         uint16_t head = mem.read16(kBda, kKbdHead), tail = mem.read16(kBda, kKbdTail);
         bool empty = head == tail;
+        if (ah != 0 || !empty) log("INT 16 AH=%02X empty=%d head=%04X tail=%04X\n", ah, empty, head, tail);
         switch (ah & 0xEF) {
-            case 0x00:
-                if (empty) {
-                    // Blocking read: rewind to re-execute INT 16h (the stub's trap)
-                    // after time passes, letting interrupts run.
-                    cpu.regs.ip -= 4;
-                    cpu.set_flag(IF, true);
-                    cpu.halted = true;
-                    return;
-                }
-                cpu.regs.r[AX] = mem.read16(kBda, head);
-                head += 2;
-                if (head >= kKbdBufEnd) head = kKbdBufStart;
-                mem.write16(kBda, kKbdHead, head);
+            case 0x00: {
+                uint16_t k;
+                if (!key_pop(&k)) return block_and_retry();
+                cpu.regs.r[AX] = k;
                 break;
+            }
             case 0x01:
                 set_return_flag(ZF, empty);
                 if (!empty) cpu.regs.r[AX] = mem.read16(kBda, head);
@@ -175,6 +144,128 @@ Machine::Machine(std::filesystem::path game_dir) {
 }
 
 Machine::~Machine() = default;
+
+namespace {
+constexpr uint16_t kCursorPos = 0x50;   // 8 pages x (col, row)
+constexpr uint16_t kTextSeg = 0xB800;
+}  // namespace
+
+void Machine::text_put(uint8_t ch, uint8_t attr, bool use_attr) {
+    uint8_t col = mem.read8(Memory::linear(kBda, kCursorPos)), row = mem.read8(Memory::linear(kBda, kCursorPos + 1));
+    uint16_t off = uint16_t((row * 80 + col) * 2);
+    mem.write8(Memory::linear(kTextSeg, off), ch);
+    if (use_attr) mem.write8(Memory::linear(kTextSeg, uint16_t(off + 1)), attr);
+}
+
+void Machine::text_scroll(int lines, uint8_t attr, int top, int left, int bottom, int right, bool up) {
+    int height = bottom - top + 1;
+    if (lines == 0 || lines > height) lines = height;
+    for (int i = 0; i < height; i++) {
+        int dst = up ? top + i : bottom - i;
+        int src = up ? dst + lines : dst - lines;
+        for (int c = left; c <= right; c++) {
+            uint16_t d = uint16_t((dst * 80 + c) * 2);
+            bool blank = up ? src > bottom : src < top;
+            uint16_t v = blank ? uint16_t(0x20 | (attr << 8)) : mem.read16(kTextSeg, uint16_t((src * 80 + c) * 2));
+            mem.write16(kTextSeg, d, v);
+        }
+    }
+}
+
+std::string Machine::text_screen() {
+    std::string out;
+    for (int r = 0; r < 25; r++) {
+        for (int c = 0; c < 80; c++) {
+            uint8_t ch = mem.read8(Memory::linear(kTextSeg, uint16_t((r * 80 + c) * 2)));
+            // CP437 box drawing -> ASCII approximations.
+            if (ch >= 0xB3 && ch <= 0xDA) ch = (ch == 0xB3 || ch == 0xBA) ? '|' : (ch == 0xC4 || ch == 0xCD) ? '-' : '+';
+            else if (ch < 32 || ch >= 127) ch = ch ? '.' : ' ';
+            out += char(ch);
+        }
+        while (!out.empty() && out.back() == ' ') out.pop_back();
+        out += '\n';
+    }
+    return out;
+}
+
+void Machine::int10() {
+    Regs& r = cpu.regs;
+    uint8_t ah = r.r8(4), al = r.r8(0);
+    uint8_t col = mem.read8(Memory::linear(kBda, kCursorPos)), row = mem.read8(Memory::linear(kBda, kCursorPos + 1));
+    switch (ah) {
+        case 0x00:
+            log("INT 10 set mode %02X\n", al);
+            mem.write8(Memory::linear(kBda, kVideoMode), al & 0x7F);
+            if ((al & 0x7F) <= 3 && !(al & 0x80))
+                for (uint16_t i = 0; i < 4000; i += 2) mem.write16(kTextSeg, i, 0x0720);
+            mem.write16(kBda, kCursorPos, 0);
+            if (on_mode_set) on_mode_set(al & 0x7F);
+            break;
+        case 0x01: break;  // cursor shape
+        case 0x02:
+            mem.write8(Memory::linear(kBda, kCursorPos), r.r8(2));
+            mem.write8(Memory::linear(kBda, kCursorPos + 1), r.r8(6));
+            break;
+        case 0x03:
+            r.r8(2) = col;
+            r.r8(6) = row;
+            r.r[CX] = 0x0607;
+            break;
+        case 0x05: break;  // page
+        case 0x06: case 0x07:
+            text_scroll(al, r.r8(7), r.r8(5), r.r8(1), r.r8(6), r.r8(2), ah == 0x06);
+            break;
+        case 0x08: {
+            uint16_t v = mem.read16(kTextSeg, uint16_t((row * 80 + col) * 2));
+            r.r[AX] = v;
+            break;
+        }
+        case 0x09: case 0x0A: {
+            for (uint16_t i = 0; i < r.r[CX]; i++) {
+                uint16_t off = uint16_t((row * 80 + col + i) * 2);
+                if (off >= 4000) break;
+                mem.write8(Memory::linear(kTextSeg, off), al);
+                if (ah == 0x09) mem.write8(Memory::linear(kTextSeg, uint16_t(off + 1)), r.r8(3));
+            }
+            break;
+        }
+        case 0x0E:
+            if (al == 0x0D) col = 0;
+            else if (al == 0x0A) row++;
+            else if (al == 0x08) { if (col) col--; }
+            else if (al == 0x07) {}
+            else {
+                text_put(al, 0, false);
+                if (++col >= 80) { col = 0; row++; }
+            }
+            if (row >= 25) { text_scroll(1, 0x07, 0, 0, 24, 79, true); row = 24; }
+            mem.write8(Memory::linear(kBda, kCursorPos), col);
+            mem.write8(Memory::linear(kBda, kCursorPos + 1), row);
+            break;
+        case 0x0F:
+            r.r8(0) = mem.read8(Memory::linear(kBda, kVideoMode));
+            r.r8(4) = 80;
+            r.r8(7) = 0;
+            break;
+        case 0x10:
+            if (al == 0x10) { dac[r.r[BX] & 0xFF][0] = r.r8(6) & 0x3F; dac[r.r[BX] & 0xFF][1] = r.r8(5) & 0x3F; dac[r.r[BX] & 0xFF][2] = r.r8(1) & 0x3F; }
+            else if (al == 0x12) {
+                for (uint16_t i = 0; i < r.r[CX]; i++)
+                    for (int k = 0; k < 3; k++)
+                        dac[(r.r[BX] + i) & 0xFF][k] = mem.read8(Memory::linear(r.s[ES], uint16_t(r.r[DX] + i * 3 + k))) & 0x3F;
+            } else log("INT 10 AX=%04X (palette)\n", r.r[AX]);
+            break;
+        case 0x1A:
+            if (al == 0) { r.r8(0) = 0x1A; r.r[BX] = 0x0008; }
+            break;
+        case 0x12:
+            if (r.r8(3) == 0x10) { r.r[BX] = 0x0003; r.r[CX] = 0x0009; }
+            break;
+        default:
+            log("INT 10 AH=%02X AL=%02X\n", ah, al);
+            break;
+    }
+}
 
 void Machine::log(const char* fmt, ...) {
     if (!trace) return;
@@ -228,6 +319,26 @@ void Machine::key_press(uint8_t scan, uint8_t ascii) {
     mem.write16(kBda, tail, uint16_t(ascii | (scan << 8)));
     mem.write16(kBda, kKbdTail, next);
     cpu.halted = false;
+}
+
+bool Machine::key_available() const {
+    return mem.read16(kBda, kKbdHead) != mem.read16(kBda, kKbdTail);
+}
+
+bool Machine::key_pop(uint16_t* key) {
+    uint16_t head = mem.read16(kBda, kKbdHead);
+    if (head == mem.read16(kBda, kKbdTail)) return false;
+    *key = mem.read16(kBda, head);
+    head += 2;
+    if (head >= kKbdBufEnd) head = kKbdBufStart;
+    mem.write16(kBda, kKbdHead, head);
+    return true;
+}
+
+void Machine::block_and_retry() {
+    cpu.regs.ip -= 4;          // back onto the FE 38 trap in the stub
+    cpu.set_flag(IF, true);
+    cpu.halted = true;
 }
 
 void Machine::setup_ports() {

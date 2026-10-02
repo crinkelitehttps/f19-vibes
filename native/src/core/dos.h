@@ -46,6 +46,7 @@ private:
     };
     std::vector<Process> procs_;
     uint8_t last_return_code_ = 0;
+    uint8_t pending_scan_ = 0;   // second byte of an extended key for AH=01/06/07/08
     uint16_t build_env(const std::string& program_path);
     uint16_t make_psp(uint16_t seg, uint16_t mem_end, uint16_t env, uint16_t parent, const std::string& tail);
     // Load image file into memory. For MZ: relocates by `reloc_seg`; returns

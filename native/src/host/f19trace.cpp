@@ -3,6 +3,7 @@
 //
 // Usage: f19trace GAMEDIR [-p PROGRAM] [-a ARGS] [-n MILLIONS] [-t] [-s OUT.ppm] [-k KEYS]
 //   -k KEYS: keys to type, one per emulated second ('\n' = Enter).
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -23,6 +24,19 @@ static void screenshot(Machine& m, const char* path) {
         std::fwrite(rgb, 1, 3, f);
     }
     std::fclose(f);
+}
+
+// US keyboard scan codes for printable ASCII (set 1).
+static uint8_t scan_for(char c) {
+    static const char* rows[] = {"1234567890-=", "qwertyuiop[]", "asdfghjkl;'`", "zxcvbnm,./"};
+    static const uint8_t base[] = {0x02, 0x10, 0x1E, 0x2C};
+    char l = char(std::tolower(uint8_t(c)));
+    for (int r = 0; r < 4; r++)
+        for (int i = 0; rows[r][i]; i++)
+            if (rows[r][i] == l) return uint8_t(base[r] + i);
+    if (c == ' ') return 0x39;
+    if (c == '\n') return 0x1C;
+    return 0;
 }
 
 int main(int argc, char** argv) {
@@ -54,9 +68,7 @@ int main(int argc, char** argv) {
         m.run(slice);
         if (k < keys.size()) {
             char c = keys[k++];
-            if (c == '\n') m.key_press(0x1C, 0x0D);
-            else if (c == ' ') m.key_press(0x39, ' ');
-            else m.key_press(0, uint8_t(c));
+            m.key_press(scan_for(c), c == '\n' ? 0x0D : uint8_t(c));
         }
     }
     std::fprintf(stderr, "stopped after %llu instructions (%.1f s emulated): %s\n",
@@ -64,5 +76,8 @@ int main(int argc, char** argv) {
                  m.stop_reason.empty() ? "budget reached" : m.stop_reason.c_str());
     std::fprintf(stderr, "CPU at %04X:%04X\n", m.cpu.regs.s[CS], m.cpu.regs.ip);
     if (!shot.empty()) screenshot(m, shot.c_str());
+    uint8_t mode = m.mem.read8(0x449);
+    std::fprintf(stderr, "video mode %02X\n", mode);
+    if (mode <= 3) std::fprintf(stderr, "%s", m.text_screen().c_str());
     return 0;
 }

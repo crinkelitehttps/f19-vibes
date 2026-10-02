@@ -438,10 +438,33 @@ void Dos::int21() {
     uint8_t ah = r.r8(4), al = r.r8(0);
     switch (ah) {
         case 0x00: terminate(0); return;
+        case 0x01: case 0x07: case 0x08: {  // read char (01 echoes)
+            uint16_t k;
+            if (pending_scan_) { r.r8(0) = pending_scan_; pending_scan_ = 0; return; }
+            if (!m_.key_pop(&k)) return m_.block_and_retry();
+            r.r8(0) = uint8_t(k);
+            if (!r.r8(0)) pending_scan_ = uint8_t(k >> 8);  // extended key: scan code next
+            m_.log("DOS read char %02X\n", r.r8(0));
+            return;
+        }
         case 0x02: m_.log("DOS putc '%c'\n", r.r8(2)); return;
         case 0x06:
-            if (r.r8(2) == 0xFF) { m_.set_return_flag(ZF, true); r.r8(0) = 0; }
+            if (r.r8(2) == 0xFF) {
+                uint16_t k;
+                if (pending_scan_) { r.r8(0) = pending_scan_; pending_scan_ = 0; m_.set_return_flag(ZF, false); return; }
+                if (!m_.key_pop(&k)) { r.r8(0) = 0; m_.set_return_flag(ZF, true); return; }
+                r.r8(0) = uint8_t(k);
+                if (!r.r8(0)) pending_scan_ = uint8_t(k >> 8);
+                m_.set_return_flag(ZF, false);
+            } else m_.log("DOS putc '%c'\n", r.r8(2));
             return;
+        case 0x0C: {  // flush buffer, then run function AL
+            uint16_t k;
+            while (m_.key_pop(&k)) {}
+            pending_scan_ = 0;
+            if (al == 0x01 || al == 0x06 || al == 0x07 || al == 0x08) { r.r8(4) = al; int21(); }
+            return;
+        }
         case 0x09: {
             std::string s;
             for (uint16_t o = r.r[DX];; o++) {
@@ -452,7 +475,7 @@ void Dos::int21() {
             m_.log("DOS print \"%s\"\n", s.c_str());
             return;
         }
-        case 0x0B: r.r8(0) = 0; return;
+        case 0x0B: r.r8(0) = (m_.key_available() || pending_scan_) ? 0xFF : 0x00; return;
         case 0x0E: r.r8(0) = 3; return;     // select disk: 3 drives
         case 0x19: r.r8(0) = 2; return;     // current disk C:
         case 0x1A: dta_seg_ = r.s[DS]; dta_off_ = r.r[DX]; return;
