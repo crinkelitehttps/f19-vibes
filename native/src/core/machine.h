@@ -61,7 +61,15 @@ public:
     std::string text_screen();
     std::function<void(uint8_t mode)> on_mode_set;
     // Keyboard: host pushes (scan, ascii); BIOS INT 16h consumes.
+    // Keyboard. key_event queues one raw scan-code byte (set 1, with 0x80 for
+    // release, 0xE0 prefixes as sent by a 101-key keyboard); each is
+    // delivered through port 60h and IRQ1, so games with their own INT 9
+    // handler see make/break codes. `bios_key` (ascii | scan << 8) is what
+    // the BIOS INT 9 handler buffers for this byte, 0 for none.
+    void key_event(uint8_t code, uint16_t bios_key);
+    // Convenience: make + break for a key with this BIOS code.
     void key_press(uint8_t scan, uint8_t ascii);
+    void bios_enqueue(uint16_t key);
     // Take the next key from the BIOS buffer (ascii | scan << 8), if any.
     bool key_pop(uint16_t* key);
     bool key_available() const;
@@ -94,6 +102,12 @@ private:
     uint16_t pit_count() const;
     uint64_t next_tick_us_ = 0;
     bool irq0_in_service_ = false;
+    bool irq1_in_service_ = false;
+    std::deque<std::pair<uint8_t, uint16_t>> kbd_queue_;
+    uint8_t port60_ = 0;
+    uint16_t kbd_bios_key_ = 0;
+    void service_keyboard();
+    uint64_t last_service_ = 0;
     uint8_t pic_mask_ = 0;
     uint64_t tick_period_us() const { return uint64_t(pit_reload_ ? pit_reload_ : 65536) * 1000000 / 1193182; }
     void service_timer();

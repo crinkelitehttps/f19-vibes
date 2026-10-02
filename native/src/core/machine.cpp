@@ -81,6 +81,25 @@ Machine::Machine(std::filesystem::path game_dir) {
         uint16_t id = register_callback([] {}, "int1c");
         set_vector(0x1C, kStubSeg, make_stub(id, {0xCF}));
     }
+    // INT 09h: BIOS keyboard handler. Buffers the key associated with the
+    // scan code, tracks Shift/Ctrl/Alt in the BDA flags, sends EOI.
+    hook_interrupt(0x09, [this] {
+        uint8_t code = port60_;
+        uint8_t flags = mem.read8(Memory::linear(kBda, kKbdFlags));
+        bool up = code & 0x80;
+        uint8_t bit = 0;
+        switch (code & 0x7F) {
+            case 0x2A: bit = 0x02; break;  // left shift
+            case 0x36: bit = 0x01; break;  // right shift
+            case 0x1D: bit = 0x04; break;  // ctrl
+            case 0x38: bit = 0x08; break;  // alt
+        }
+        if (bit && code != 0xE0) flags = up ? (flags & ~bit) : (flags | bit);
+        mem.write8(Memory::linear(kBda, kKbdFlags), flags);
+        if (!up && kbd_bios_key_) bios_enqueue(kbd_bios_key_);
+        kbd_bios_key_ = 0;
+        irq1_in_service_ = false;
+    }, "bios int09");
     hook_interrupt(0x11, [this] { cpu.regs.r[AX] = mem.read16(kBda, kEquipment); }, "int11");
     hook_interrupt(0x12, [this] { cpu.regs.r[AX] = 640; }, "int12");
 
@@ -316,12 +335,31 @@ void Machine::set_return_flag(uint16_t f, bool on) {
     mem.write16(cpu.regs.s[SS], uint16_t(sp + 4), fl);
 }
 
+void Machine::key_event(uint8_t code, uint16_t bios_key) {
+    kbd_queue_.emplace_back(code, bios_key);
+    cpu.halted = false;
+}
+
 void Machine::key_press(uint8_t scan, uint8_t ascii) {
+    key_event(scan, uint16_t(ascii | (scan << 8)));
+    key_event(uint8_t(scan | 0x80), 0);
+}
+
+void Machine::service_keyboard() {
+    if (kbd_queue_.empty() || irq1_in_service_ || irq0_in_service_ || (pic_mask_ & 2) || !cpu.flag(IF)) return;
+    auto [code, key] = kbd_queue_.front();
+    kbd_queue_.pop_front();
+    port60_ = code;
+    kbd_bios_key_ = key;
+    if (cpu.irq(0x09)) irq1_in_service_ = true;
+}
+
+void Machine::bios_enqueue(uint16_t key) {
     uint16_t tail = mem.read16(kBda, kKbdTail);
     uint16_t next = tail + 2;
     if (next >= kKbdBufEnd) next = kKbdBufStart;
     if (next == mem.read16(kBda, kKbdHead)) return;  // full
-    mem.write16(kBda, tail, uint16_t(ascii | (scan << 8)));
+    mem.write16(kBda, tail, key);
     mem.write16(kBda, kKbdTail, next);
     cpu.halted = false;
 }
@@ -382,11 +420,17 @@ void Machine::setup_ports() {
     port_in[0x61] = []() -> uint8_t { return 0x00; };
     port_out[0x61] = [](uint8_t) {};
     // PIC.
-    port_out[0x20] = [this](uint8_t v) { if (v == 0x20) irq0_in_service_ = false; };
+    // Non-specific EOI clears the highest-priority request in service.
+    port_out[0x20] = [this](uint8_t v) {
+        if (v != 0x20) return;
+        if (irq0_in_service_) irq0_in_service_ = false;
+        else irq1_in_service_ = false;
+    };
     port_in[0x21] = [this]() -> uint8_t { return pic_mask_; };
     port_out[0x21] = [this](uint8_t v) { pic_mask_ = v; };
     // Keyboard controller data: last scan code.
-    port_in[0x60] = []() -> uint8_t { return 0; };
+    port_in[0x60] = [this]() -> uint8_t { return port60_; };
+    port_in[0x64] = []() -> uint8_t { return 0x14; };  // controller status: no data pending
     // VGA input status (mode 13h timing: 70.086 Hz, 449 lines of 31.778 us,
     // 400 visible). Bit 0: display disabled (hblank or vblank); bit 3:
     // vertical retrace (lines 412-413).
@@ -447,7 +491,11 @@ void Machine::run(uint64_t budget) {
         } else {
             cpu.step();
         }
-        if ((cpu.instructions & 63) == 0) service_timer();
+        if (cpu.instructions - last_service_ >= 64) {
+            last_service_ = cpu.instructions;
+            service_timer();
+            service_keyboard();
+        }
     }
 }
 

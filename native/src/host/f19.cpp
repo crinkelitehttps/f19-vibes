@@ -91,12 +91,12 @@ bool map_key(SDL_Scancode sc, KeyCode& k) {
         {SDL_SCANCODE_F4, {0x3E, 0, 0}}, {SDL_SCANCODE_F5, {0x3F, 0, 0}}, {SDL_SCANCODE_F6, {0x40, 0, 0}},
         {SDL_SCANCODE_F7, {0x41, 0, 0}}, {SDL_SCANCODE_F8, {0x42, 0, 0}}, {SDL_SCANCODE_F9, {0x43, 0, 0}},
         {SDL_SCANCODE_F10, {0x44, 0, 0}},
-        // Keypad with NumLock on (the demo recording uses keypad digits).
-        {SDL_SCANCODE_KP_7, {0x47, '7', '7'}}, {SDL_SCANCODE_KP_8, {0x48, '8', '8'}}, {SDL_SCANCODE_KP_9, {0x49, '9', '9'}},
-        {SDL_SCANCODE_KP_MINUS, {0x4A, '-', '-'}}, {SDL_SCANCODE_KP_4, {0x4B, '4', '4'}}, {SDL_SCANCODE_KP_5, {0x4C, '5', '5'}},
-        {SDL_SCANCODE_KP_6, {0x4D, '6', '6'}}, {SDL_SCANCODE_KP_PLUS, {0x4E, '+', '+'}}, {SDL_SCANCODE_KP_1, {0x4F, '1', '1'}},
-        {SDL_SCANCODE_KP_2, {0x50, '2', '2'}}, {SDL_SCANCODE_KP_3, {0x51, '3', '3'}}, {SDL_SCANCODE_KP_0, {0x52, '0', '0'}},
-        {SDL_SCANCODE_KP_PERIOD, {0x53, '.', '.'}}, {SDL_SCANCODE_KP_ENTER, {0x1C, 0x0D, 0x0D}},
+        // Keypad with NumLock off: cursor codes, as F-19 expects for flying.
+        {SDL_SCANCODE_KP_7, {0x47, 0, 0}}, {SDL_SCANCODE_KP_8, {0x48, 0, 0}}, {SDL_SCANCODE_KP_9, {0x49, 0, 0}},
+        {SDL_SCANCODE_KP_MINUS, {0x4A, '-', '-'}}, {SDL_SCANCODE_KP_4, {0x4B, 0, 0}}, {SDL_SCANCODE_KP_5, {0x4C, 0, 0}},
+        {SDL_SCANCODE_KP_6, {0x4D, 0, 0}}, {SDL_SCANCODE_KP_PLUS, {0x4E, '+', '+'}}, {SDL_SCANCODE_KP_1, {0x4F, 0, 0}},
+        {SDL_SCANCODE_KP_2, {0x50, 0, 0}}, {SDL_SCANCODE_KP_3, {0x51, 0, 0}}, {SDL_SCANCODE_KP_0, {0x52, 0, 0}},
+        {SDL_SCANCODE_KP_PERIOD, {0x53, 0, 0}}, {SDL_SCANCODE_KP_ENTER, {0x1C, 0x0D, 0x0D}},
         {SDL_SCANCODE_KP_DIVIDE, {0x35, '/', '/'}},
         // Cursor keys and friends (no ASCII).
         {SDL_SCANCODE_HOME, {0x47, 0, 0}}, {SDL_SCANCODE_UP, {0x48, 0, 0}}, {SDL_SCANCODE_PAGEUP, {0x49, 0, 0}},
@@ -107,6 +107,29 @@ bool map_key(SDL_Scancode sc, KeyCode& k) {
     for (auto& e : table)
         if (e.sdl == sc) { k = e.k; return true; }
     return false;
+}
+
+// Keys a 101-key keyboard sends with an E0 prefix.
+bool is_extended(SDL_Scancode sc) {
+    switch (sc) {
+        case SDL_SCANCODE_UP: case SDL_SCANCODE_DOWN: case SDL_SCANCODE_LEFT: case SDL_SCANCODE_RIGHT:
+        case SDL_SCANCODE_HOME: case SDL_SCANCODE_END: case SDL_SCANCODE_PAGEUP: case SDL_SCANCODE_PAGEDOWN:
+        case SDL_SCANCODE_INSERT: case SDL_SCANCODE_DELETE: case SDL_SCANCODE_KP_ENTER: case SDL_SCANCODE_KP_DIVIDE:
+        case SDL_SCANCODE_RCTRL: case SDL_SCANCODE_RALT:
+            return true;
+        default:
+            return false;
+    }
+}
+
+uint8_t modifier_scan(SDL_Scancode sc) {
+    switch (sc) {
+        case SDL_SCANCODE_LSHIFT: return 0x2A;
+        case SDL_SCANCODE_RSHIFT: return 0x36;
+        case SDL_SCANCODE_LCTRL: case SDL_SCANCODE_RCTRL: return 0x1D;
+        case SDL_SCANCODE_LALT: case SDL_SCANCODE_RALT: return 0x38;
+        default: return 0;
+    }
 }
 
 // BIOS extended codes for function keys with modifiers.
@@ -172,25 +195,26 @@ int main(int argc, char** argv) {
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_EVENT_QUIT) running = false;
             if (ev.type == SDL_EVENT_KEY_DOWN || ev.type == SDL_EVENT_KEY_UP) {
-                // Keep the BIOS shift-state byte in sync.
-                SDL_Keymod mod = ev.key.mod;
-                uint8_t flags = m.mem.read8(0x417) & 0xD0;
-                if (mod & SDL_KMOD_RSHIFT) flags |= 0x01;
-                if (mod & SDL_KMOD_LSHIFT) flags |= 0x02;
-                if (mod & SDL_KMOD_CTRL) flags |= 0x04;
-                if (mod & SDL_KMOD_ALT) flags |= 0x08;
-                flags |= 0x20;  // NumLock on
-                m.mem.write8(0x417, flags);
-            }
-            if (ev.type == SDL_EVENT_KEY_DOWN) {
+                // Raw make/break codes go through port 60h + IRQ1 so the
+                // game's own keyboard handler sees held keys; the BIOS
+                // handler buffers `bios` for menus and typed commands.
+                bool down = ev.type == SDL_EVENT_KEY_DOWN;
+                SDL_Scancode sc = ev.key.scancode;
+                uint8_t code = modifier_scan(sc);
+                uint16_t bios = 0;
                 KeyCode k;
-                if (!map_key(ev.key.scancode, k)) continue;
-                bool shift = ev.key.mod & SDL_KMOD_SHIFT, ctrl = ev.key.mod & SDL_KMOD_CTRL, alt = ev.key.mod & SDL_KMOD_ALT;
-                uint8_t ascii = shift ? k.shift_ascii : k.ascii;
-                uint8_t scan = fkey_scan(k.scan, shift, ctrl, alt);
-                if (alt) ascii = 0;
-                else if (ctrl && std::isalpha(ascii)) ascii = uint8_t(std::tolower(ascii) & 0x1F);
-                m.key_press(scan, ascii);
+                if (!code) {
+                    if (!map_key(sc, k)) continue;
+                    code = k.scan;
+                    bool shift = ev.key.mod & SDL_KMOD_SHIFT, ctrl = ev.key.mod & SDL_KMOD_CTRL, alt = ev.key.mod & SDL_KMOD_ALT;
+                    uint8_t ascii = shift ? k.shift_ascii : k.ascii;
+                    uint8_t scan = fkey_scan(k.scan, shift, ctrl, alt);
+                    if (alt) ascii = 0;
+                    else if (ctrl && std::isalpha(ascii)) ascii = uint8_t(std::tolower(ascii) & 0x1F);
+                    bios = uint16_t(ascii | (scan << 8));
+                }
+                if (is_extended(sc)) m.key_event(0xE0, 0);
+                m.key_event(down ? code : uint8_t(code | 0x80), down ? bios : 0);
             }
         }
 
