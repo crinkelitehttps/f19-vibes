@@ -66,3 +66,25 @@ def load_3dt(path):
         objs.append(lst)
     assert p == len(d), (p, len(d))
     return objs
+
+
+# .WLD site records: 16 bytes (id, x, y, status, a, b, c, type) from offset
+# 0x38 until a zero-type record. Positions are world / 32; WLD y increases
+# southwards (verified: every site lands on its terrain feature cluster, the
+# other orientation puts many in open sea). Type codes seen in NC:
+# 0x124 airfield, 0x12b airfield/carrier?, 0x113 site 0x80 east of an
+# airfield (SAM/radar?), 0x11a target, 0x146/0x148/0x149 other.
+WORLD_SIZE = 16 * 0x10000
+
+
+def load_wld(path, offset=0):
+    """Returns [{id, type, x, y (world units, +y north), raw}] for the site table."""
+    d = Path(path).read_bytes()[offset:]
+    assert d[:2] == b"BN", "not a WLD block"
+    sites = []
+    for o in range(0x38, len(d) - 15, 16):
+        r = struct.unpack_from("<8H", d, o)
+        if r[7] == 0:
+            break
+        sites.append({"id": r[0], "type": r[7], "x": r[1] * 32, "y": WORLD_SIZE - r[2] * 32, "raw": list(r)})
+    return sites

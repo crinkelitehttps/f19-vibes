@@ -198,8 +198,64 @@ Rendering notes (implemented in `viewer/index.html`):
   far to near. Only level 4 covers the world. Drawing every level everywhere
   buries the ground under ~450k ground dots (level-1 tile type 0 → shape 15).
 
-## .WLD
+## .WLD — world sites (+ mission tables, place names)
 
-Not referenced by any executable in the demo. Header `"BN"`, then
-16-byte records that look like `(id, x, y, ..., type)` — likely the full
-game's mission/target database. Undecoded.
+Not opened by name in the demo: its contents travel inside the game-state
+block (see REPLAY.DTA, offset 0x7a). Parser: `world.load_wld`.
+
+```
+"BN" u16 46, 18, 32, 0, 0, 0 ...      header (counts, meaning TBD)
+from 0x38, 16-byte site records until type == 0:
+  u16 id, x, y, status, a, b, c, type
+```
+
+Positions are world / 32. **WLD y increases southwards**: world
+`(X, Y) = (x * 32, 0x100000 - y * 32)`. Verified on the map: every site lands
+on its own terrain feature cluster; the other orientation puts many sites
+in open sea. Player start (`FUN_1000_4cf4`) takes a site record from a
+16-byte table at DGROUP 0x7fea and uses x << 5 and −(y + 0x8000) << 5, which
+is consistent with these units.
+
+Types seen: 0x124 airfield (16), 0x12b one special airfield/carrier,
+0x113 site 0x80 east of an airfield (SAM/radar?), 0x11a target,
+0x146/0x148/0x149 other. After the records: mission tables, a terrain-ish
+byte grid, then a place-name string table (Severomorsk, Kandalaksha,
+Gällivare, Luleå, Nikel, Ristikent, ...). Undecoded beyond the records.
+
+## REPLAY.DTA / STREAM.DTA — the recorded demo
+
+Saved by `FUN_1000_4fde` when Insert is pressed while recording; loaded by
+`FUN_1000_5012`. Decoder: `tools/replay.py`.
+
+**REPLAY.DTA** (0x1400 bytes) is a snapshot of the shared game-state block
+(far pointer at DGROUP 0x9bc6): driver file names, mission/state words, and
+at 0x7a a full WLD block as modified by the mission (site status fields
+changed; mission-generated units in previously empty records). Playback
+restores it, keeping block words 0x1a–0x20.
+
+**STREAM.DTA** (16000 bytes, far buffer 0x1ede:0x3e8 in the image) is
+recorded input, not positions. Three channels share one sequence of 4-byte
+records `(s16 value, s16 count)`:
+
+- A channel holds `value` for `count + 1` reads, then takes the next record
+  in the sequence. The recorder reserves a record when a run starts, so
+  records appear in run-start order; records 0–2 are each channel's first
+  run (`FUN_1000_ddae`). Stored count is `count + (value >> 15)`.
+- Read order per frame (main loop `FUN_1000_1b8c`):
+  1. ch 0: key code, BIOS `scan << 8 | ascii` (`FUN_1000_200a`)
+  2. ch 1: joystick, high nibble X, low nibble Y, 8 = centre
+  3. ch 2: fire button, only when frame counter [0x5442] is odd
+     (`FUN_1000_4874`); the counter then increments
+  4. ch 2: button 1 (`FUN_1000_d298`, every frame)
+- The counter starts at `random & 0x7ff8` (even, `FUN_1000_4ab6`).
+
+Decoding with an even start uses 2599 records for 4737 frames, ends exactly
+on the Insert key (0x5200) that stopped recording, and gives zero
+implausible values; the odd start fails on 1639 values. The remaining 1401
+records are stale buffer contents. The pilot used keypad flight keys
+(8/2/6), F-key views, `+` (full throttle), 28 frames of fire, 7 of button 1.
+
+To turn this into a flight path the flight model has to be reimplemented
+(integration is in `FUN_1000_200a` around the `0x8d68`/`0x9388`/`0x45fe`
+updates). The starting airfield index (`[0x86d8]`) is not yet located in
+the snapshot.
