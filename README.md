@@ -52,3 +52,24 @@ tools/run_f19.sh full --fresh   # reset the run copy (roster, saves)
 Runs DOSBox from a disposable copy in `out/run/<which>/`. Ctrl+F5
 screenshot, Ctrl+Alt+F5 record video (to `out/run/capture/`),
 Ctrl+F11/F12 slower/faster, Ctrl+F10 release the mouse.
+
+## Native port (work in progress)
+
+See `docs/native-port.md`. Build:
+
+```
+cmake -S native -B build/native -G Ninja && ninja -C build/native
+```
+
+CPU conformance (SingleStepTests 8088, ~760 MB download into `build/sst/`):
+
+```
+python3 native/tools/sst_fetch.py build/sst
+build/native/sst_runner build/sst/*.bin
+```
+
+Headless bring-up runner (boots F19.COM, traces DOS/BIOS calls):
+
+```
+build/native/f19trace out/run/native -n 20 -t -s shot.ppm
+```
