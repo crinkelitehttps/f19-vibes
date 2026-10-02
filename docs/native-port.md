@@ -197,6 +197,21 @@ its physics by frame time (flips per emulated second in the demo: 4 MIPS
 ~8, 8 ~21, 16 ~43, 32 ~62). The interpreter manages ~50 MIPS here; the
 default is 25 MIPS.
 
+Frame pacing: the game locks its frames to the emulated VGA vertical
+retrace (in-flight frame intervals: median 14.27 ms = one 70 Hz refresh,
+p99 23.8 ms). The host sets the emulated refresh to the display's
+(`--vga-hz` to override): at 60 Hz, 93% of demo frame intervals are exactly
+one refresh. Emulation runs on its own thread against a real-time clock in
+~1 ms slices (time is dropped only if it falls >250 ms behind); the main
+thread renders snapshots and paces itself to the refresh, since vsync is
+not honoured under WSLg. `F19_PERF=1` prints display/game fps, emulation
+load and dropped time once a second.
+
+View keys (from the key handler): F1 cockpit; Shift+F1..F6 external views
+(view variable `[9422]` = 87h, 84h, 85h, 89h, 88h, 8Bh). EGAME's INT 9 handler
+dedupes the BIOS key buffer using the AT BIOS bounds at 0040:0080/0082,
+which must be initialised.
+
 Not captured yet (stay 320x200): the carrier's wake (drawn through another
 path, probably a C-called polygon fill in the engine segment).
 

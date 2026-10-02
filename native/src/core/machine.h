@@ -33,6 +33,9 @@ public:
     // Virtual time: instructions per millisecond of emulated time.
     uint32_t ips_per_ms = 4000;
     uint64_t now_us() const { return cpu.instructions * 1000 / ips_per_ms; }
+    // Emulated VGA refresh rate (mode 13h: 70.086 Hz). The game locks its
+    // frames to vertical retrace; matching the host display avoids beating.
+    double vga_refresh_hz = 70.086;
 
     // Logging of service calls (DOS/BIOS); set by the host.
     bool trace = false;

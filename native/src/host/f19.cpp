@@ -5,7 +5,9 @@
 // for the high-resolution renderer (captured primitives, the engine's own
 // 320x200 frame).
 //
-// Usage: f19 [GAMEDIR] [--scale N] [--mips N] [--msaa N] [--trace] [--original-driver] [--verify-driver] [--lowres]
+// Set F19_PERF=1 for a once-a-second timing summary.
+//
+// Usage: f19 [GAMEDIR] [--scale N] [--mips N] [--msaa N] [--vga-hz HZ] [--trace] [--original-driver] [--verify-driver] [--lowres]
 //   The 3D world is rendered at the window's resolution unless --lowres
 //   (needs the native driver).
 //   GAMEDIR defaults to the current directory; it must be writable (the
@@ -14,6 +16,10 @@
 #include <zlib.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <mutex>
+#include <thread>
 #include <ctime>
 #include <cctype>
 #include <cstdio>
@@ -195,6 +201,7 @@ int main(int argc, char** argv) {
     int scale = 4;
     double mips = 25.0;   // emulated CPU speed; the game renders as fast as it allows
     int msaa = 8;
+    double vga_hz = 0;    // 0 = match the display
     bool trace = false, original_driver = false, verify_driver = false, lowres = false, no_depth = false;
     for (int i = 1; i < argc; i++) {
         if (!std::strcmp(argv[i], "--scale") && i + 1 < argc) scale = std::atoi(argv[++i]);
@@ -205,6 +212,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--lowres")) lowres = true;
         else if (!std::strcmp(argv[i], "--msaa") && i + 1 < argc) msaa = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--no-depth")) no_depth = true;
+        else if (!std::strcmp(argv[i], "--vga-hz") && i + 1 < argc) vga_hz = std::atof(argv[++i]);
         else dir = argv[i];
     }
 
@@ -264,9 +272,65 @@ int main(int argc, char** argv) {
     std::vector<uint32_t> screen(640 * 400);
 
     bool want_screenshot = false;
-    uint64_t last = SDL_GetTicksNS();
+
+    // Match the emulated VGA refresh to the display, so each game frame
+    // (the game syncs to vertical retrace) lines up with one display frame.
+    if (vga_hz <= 0) {
+        const SDL_DisplayMode* dm = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(win));
+        vga_hz = dm && dm->refresh_rate > 0 ? dm->refresh_rate : 60.0;
+    }
+    m.vga_refresh_hz = vga_hz;
+    std::fprintf(stderr, "emulated CPU %.0f MIPS, VGA refresh %.2f Hz\n", mips, vga_hz);
+
+    // Emulation runs on its own thread against a real-time clock, in slices
+    // of about 1 ms of emulated time; the main thread handles input and
+    // renders snapshots. `mtx` guards the machine.
+    std::mutex mtx;
+    std::atomic<bool> quit{false};
+    std::atomic<uint64_t> perf_drops{0}, perf_busy_ns{0};
+    bool perf = std::getenv("F19_PERF") != nullptr;
+    std::thread emu([&] {
+        using clk = std::chrono::steady_clock;
+        const uint64_t slice = m.ips_per_ms;               // 1 ms emulated
+        const uint64_t max_lag = uint64_t(m.ips_per_ms) * 250;
+        auto base_t = clk::now();
+        uint64_t base_i = m.cpu.instructions;
+        while (!quit) {
+            auto now = clk::now();
+            double ms = std::chrono::duration<double, std::milli>(now - base_t).count();
+            uint64_t target = base_i + uint64_t(ms * m.ips_per_ms);
+            bool behind = false;
+            {
+                std::lock_guard<std::mutex> lk(mtx);
+                if (m.exited) break;
+                if (target > m.cpu.instructions + max_lag) {  // fell far behind: drop time
+                    base_t = now;
+                    base_i = m.cpu.instructions;
+                    target = base_i;
+                    perf_drops++;
+                }
+                if (m.cpu.instructions < target) {
+                    auto t0 = clk::now();
+                    m.run(std::min(slice, target - m.cpu.instructions));
+                    perf_busy_ns += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(clk::now() - t0).count());
+                    behind = m.cpu.instructions < target;
+                }
+            }
+            if (!behind) std::this_thread::sleep_for(std::chrono::microseconds(300));
+        }
+    });
+
+    struct Snapshot {
+        uint8_t mode = 3;
+        std::vector<uint8_t> vram = std::vector<uint8_t>(64000), text = std::vector<uint8_t>(4000);
+        uint8_t dac[256][3] = {};
+        std::shared_ptr<const HiresFrame> frame;
+        uint64_t now_us = 0;
+    } snap;
+    uint64_t perf_t0 = SDL_GetTicksNS(), perf_frames = 0, perf_emu_us0 = 0, next_frame_ns = 0;
+    size_t perf_flips0 = 0;
     bool running = true;
-    while (running && !m.exited) {
+    while (running) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_EVENT_QUIT) running = false;
@@ -294,27 +358,35 @@ int main(int argc, char** argv) {
                     else if (ctrl && std::isalpha(ascii)) ascii = uint8_t(std::tolower(ascii) & 0x1F);
                     bios = uint16_t(ascii | (scan << 8));
                 }
+                std::lock_guard<std::mutex> lk(mtx);
                 if (is_extended(sc)) m.key_event(0xE0, 0);
                 m.key_event(down ? code : uint8_t(code | 0x80), down ? bios : 0);
             }
         }
 
-        // Run emulated time matching real time (capped to avoid spirals).
-        uint64_t now = SDL_GetTicksNS();
-        uint64_t elapsed_ms = std::min<uint64_t>((now - last) / 1000000, 50);
-        last += elapsed_ms * 1000000;
-        if (now - last > 100000000) last = now;
-        m.run(uint64_t(elapsed_ms) * m.ips_per_ms);
+        // Snapshot what the renderer needs.
+        {
+            std::lock_guard<std::mutex> lk(mtx);
+            if (m.exited) running = false;
+            snap.mode = m.mem.read8(0x449);
+            snap.frame = capture.latest();
+            snap.now_us = m.now_us();
+            bool use_hires = snap.mode == 0x13 && snap.frame && snap.now_us - snap.frame->time_us < 300000;
+            if (!use_hires) {
+                if (snap.mode == 0x13) std::memcpy(snap.vram.data(), m.mem.data() + 0xA0000, 64000);
+                else std::memcpy(snap.text.data(), m.mem.data() + 0xB8000, 4000);
+                std::memcpy(snap.dac, m.dac, sizeof snap.dac);
+            }
+        }
 
-        uint8_t mode = m.mem.read8(0x449);
         // 4:3 letterbox in the window's pixels.
         int ow, oh;
         SDL_GetWindowSizeInPixels(win, &ow, &oh);
         int vw = ow, vh = ow * 3 / 4;
         if (vh > oh) { vh = oh; vw = oh * 4 / 3; }
         float vx = float((ow - vw) / 2), vy = float((oh - vh) / 2);
-        auto frame = capture.latest();
-        bool use_hires = mode == 0x13 && frame && m.now_us() - frame->time_us < 300000;
+        auto& frame = snap.frame;
+        bool use_hires = snap.mode == 0x13 && frame && snap.now_us - frame->time_us < 300000;
         GLuint tex;
         if (use_hires) {
             if (frame != shown_frame || !hires_tex || hires_w != vw || hires_h != vh) {
@@ -324,9 +396,9 @@ int main(int argc, char** argv) {
                 hires_h = vh;
             }
             tex = hires_tex;
-        } else if (mode == 0x13) {
+        } else if (snap.mode == 0x13) {
             for (int i = 0; i < 64000; i++) {
-                const uint8_t* c = m.dac[m.mem.read8(0xA0000 + i)];
+                const uint8_t* c = snap.dac[snap.vram[i]];
                 screen[i] = 0xFF000000u | uint32_t(c[0] * 255 / 63) << 16 | uint32_t(c[1] * 255 / 63) << 8 | uint32_t(c[2] * 255 / 63);
             }
             tex = renderer.upload(screen.data(), 320, 200);
@@ -334,8 +406,8 @@ int main(int argc, char** argv) {
         } else {
             for (int r = 0; r < 25; r++)
                 for (int c = 0; c < 80; c++) {
-                    uint8_t ch = m.mem.read8(0xB8000 + (r * 80 + c) * 2);
-                    uint8_t at = m.mem.read8(0xB8000 + (r * 80 + c) * 2 + 1);
+                    uint8_t ch = snap.text[(r * 80 + c) * 2];
+                    uint8_t at = snap.text[(r * 80 + c) * 2 + 1];
                     uint32_t fg = 0xFF000000u | kTextPalette[at & 15], bg = 0xFF000000u | kTextPalette[(at >> 4) & 7];
                     for (int y = 0; y < 16; y++) {
                         uint8_t bits = font.glyphs.empty() ? 0 : font.glyphs[ch * font.h + std::min(y, font.h - 1)];
@@ -352,7 +424,37 @@ int main(int argc, char** argv) {
             save_screenshot(renderer, ow, oh, use_hires ? frame.get() : nullptr);
         }
         SDL_GL_SwapWindow(win);
+
+        // Pace to the display refresh in case the driver ignores vsync
+        // (seen under WSLg): sleep until the next frame slot.
+        {
+            uint64_t period = uint64_t(1e9 / vga_hz);
+            uint64_t t = SDL_GetTicksNS();
+            if (next_frame_ns == 0 || t > next_frame_ns + period) next_frame_ns = t;
+            next_frame_ns += period;
+            if (next_frame_ns > t) SDL_DelayPrecise(next_frame_ns - t);
+        }
+
+        perf_frames++;
+        uint64_t pnow = SDL_GetTicksNS();
+        if (perf && pnow - perf_t0 >= 1000000000) {
+            size_t flips;
+            {
+                std::lock_guard<std::mutex> lk(mtx);
+                flips = native_gfx.flip_times_us.size();
+            }
+            double secs = (pnow - perf_t0) / 1e9;
+            std::fprintf(stderr, "perf: display %.0f fps, game %.0f fps, emulated %.0f ms per s, emulation busy %.0f%%, dropped %llu\n",
+                         perf_frames / secs, (flips - perf_flips0) / secs, (snap.now_us - perf_emu_us0) / 1000.0 / secs,
+                         perf_busy_ns.exchange(0) / 1e7 / secs, (unsigned long long)perf_drops.exchange(0));
+            perf_t0 = pnow;
+            perf_frames = 0;
+            perf_flips0 = flips;
+            perf_emu_us0 = snap.now_us;
+        }
     }
+    quit = true;
+    emu.join();
     if (m.exited) std::fprintf(stderr, "stopped: %s\n", m.stop_reason.c_str());
     if (verify_driver) std::fprintf(stderr, "%s", native_gfx.report().c_str());
     SDL_Quit();

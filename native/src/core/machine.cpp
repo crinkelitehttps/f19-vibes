@@ -62,6 +62,10 @@ Machine::Machine(std::filesystem::path game_dir) {
     mem.write16(kBda, kMemSize, 640);
     mem.write16(kBda, kKbdHead, kKbdBufStart);
     mem.write16(kBda, kKbdTail, kKbdBufStart);
+    // Keyboard buffer bounds (AT BIOS). EGAME's INT 9 handler uses these to
+    // walk the buffer; left at 0 it corrupts the head pointer.
+    mem.write16(kBda, 0x80, kKbdBufStart);
+    mem.write16(kBda, 0x82, kKbdBufEnd);
     mem.write8(Memory::linear(kBda, kVideoMode), 3);
     mem.write16(kBda, kVideoCols, 80);
 
@@ -459,12 +463,13 @@ void Machine::setup_ports() {
     port_in[0x3DA] = [this]() -> uint8_t {
         // Use sub-microsecond time so line-level toggles are visible.
         uint64_t ns = cpu.instructions * 1000000 / ips_per_ms;
-        uint64_t frame_ns = 14268000;
+        uint64_t frame_ns = uint64_t(1e9 / vga_refresh_hz);
+        uint64_t line_ns = frame_ns / 449;
         uint64_t t = ns % frame_ns;
-        uint32_t line = uint32_t(t / 31778);
-        uint32_t in_line = uint32_t(t % 31778);
+        uint32_t line = uint32_t(t / line_ns);
+        uint32_t in_line = uint32_t(t % line_ns);
         bool vretrace = line >= 412 && line < 414;
-        bool disabled = line >= 400 || in_line >= 25422;
+        bool disabled = line >= 400 || in_line >= line_ns * 4 / 5;
         return uint8_t((disabled ? 0x01 : 0) | (vretrace ? 0x08 : 0));
     };
     // CGA/sequencer writes from the drivers: accept silently.

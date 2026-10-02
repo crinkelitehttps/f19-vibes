@@ -54,7 +54,7 @@ int main(int argc, char** argv) {
     }
     std::string program = "F19.COM", args, shot, keys, hires_shot;
     double millions = 50;
-    double mips_opt = 4.0;
+    double mips_opt = 4.0, refresh_opt = 70.086;
     bool trace = false, prof = false, drv_trace = false, native_drv = false, verify_drv = false;
     for (int i = 2; i < argc; i++) {
         if (!std::strcmp(argv[i], "-p") && i + 1 < argc) program = argv[++i];
@@ -64,6 +64,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "-P")) prof = true;
         else if (!std::strcmp(argv[i], "-D")) drv_trace = true;
         else if (!std::strcmp(argv[i], "-m") && i + 1 < argc) mips_opt = std::atof(argv[++i]);
+        else if (!std::strcmp(argv[i], "-r") && i + 1 < argc) refresh_opt = std::atof(argv[++i]);
         else if (!std::strcmp(argv[i], "-N")) native_drv = true;
         else if (!std::strcmp(argv[i], "-V")) native_drv = verify_drv = true;
         else if (!std::strcmp(argv[i], "-H") && i + 1 < argc) { hires_shot = argv[++i]; native_drv = true; }
@@ -73,6 +74,7 @@ int main(int argc, char** argv) {
     Machine m(argv[1]);
     m.trace = trace;
     m.ips_per_ms = uint32_t(mips_opt * 1000);
+    m.vga_refresh_hz = refresh_opt;
 
     // -D: trace calls into the graphics driver's exported entry points.
     struct EntryStats { std::vector<int> slots; uint64_t calls = 0; std::map<uint32_t, uint64_t> callers; std::vector<std::string> samples; };
@@ -139,7 +141,14 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "CPU at %04X:%04X\n", m.cpu.regs.s[CS], m.cpu.regs.ip);
     if (!shot.empty()) screenshot(m, shot.c_str());
     if (gfx && verify_drv) std::fprintf(stderr, "%s", gfx->report().c_str());
-    if (gfx) std::fprintf(stderr, "flips %llu in %.1f emulated s\n", (unsigned long long)gfx->stats[44].calls, m.now_us() / 1e6);
+    if (gfx) {
+        std::fprintf(stderr, "flips %llu in %.1f emulated s\n", (unsigned long long)gfx->stats[44].calls, m.now_us() / 1e6);
+        if (std::getenv("F19_FLIP_LOG")) {
+            FILE* fl = std::fopen(std::getenv("F19_FLIP_LOG"), "w");
+            for (uint64_t t : gfx->flip_times_us) std::fprintf(fl, "%llu\n", (unsigned long long)t);
+            std::fclose(fl);
+        }
+    }
     if (capture) {
         std::fprintf(stderr, "hires: %s\n", capture->status.c_str());
         std::fprintf(stderr, "hires dbg: poly %llu wrongseg %llu few-edges %llu short-loop %llu | line %llu wrongseg %llu | draw seg %04X page1 %04X\n",

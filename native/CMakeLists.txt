@@ -37,4 +37,5 @@ target_link_libraries(f19trace PRIVATE f19core f19hires)
 
 # Interactive host (SDL3).
 add_executable(f19 src/host/f19.cpp)
-target_link_libraries(f19 PRIVATE f19core f19hires ZLIB::ZLIB)
+find_package(Threads REQUIRED)
+target_link_libraries(f19 PRIVATE f19core f19hires ZLIB::ZLIB Threads::Threads)
