@@ -24,3 +24,9 @@ target_link_libraries(sst_runner PRIVATE f19core)
 # Headless runner: boot the game, trace services, dump screenshots.
 add_executable(f19trace src/host/f19trace.cpp)
 target_link_libraries(f19trace PRIVATE f19core)
+
+# Interactive host (SDL3).
+find_package(SDL3 REQUIRED CONFIG)
+find_package(ZLIB REQUIRED)
+add_executable(f19 src/host/f19.cpp)
+target_link_libraries(f19 PRIVATE f19core SDL3::SDL3 ZLIB::ZLIB)

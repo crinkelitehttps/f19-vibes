@@ -55,6 +55,8 @@ public:
 
     // VGA DAC (6-bit RGB per entry) - used by the emulated-hardware path.
     uint8_t dac[256][3] = {};
+    // Console output (DOS stdout -> BIOS teletype on the text screen).
+    void tty_out(uint8_t ch);
     // Text mode (B800) as a printable string, for headless bring-up.
     std::string text_screen();
     std::function<void(uint8_t mode)> on_mode_set;
@@ -77,6 +79,7 @@ private:
     struct CallbackEntry { Callback fn; std::string name; };
     std::vector<CallbackEntry> callbacks_;
     uint8_t dac_write_index_ = 0, dac_read_index_ = 0;
+    uint8_t seq_index_ = 0, seq_[8] = {0x03, 0x01, 0x0F, 0x00, 0x0E};
     int dac_write_phase_ = 0, dac_read_phase_ = 0;
     uint16_t stub_next_ = 0x0100;
 
@@ -84,6 +87,11 @@ private:
     uint16_t pit_reload_ = 0;       // 0 means 65536
     int pit_write_phase_ = 0;
     uint8_t pit_latch_lo_ = 0;
+    uint64_t pit_base_us_ = 0;      // when the current count started
+    bool pit_latched_ = false;
+    uint16_t pit_latch_value_ = 0;
+    int pit_read_phase_ = 0;
+    uint16_t pit_count() const;
     uint64_t next_tick_us_ = 0;
     bool irq0_in_service_ = false;
     uint8_t pic_mask_ = 0;

@@ -447,7 +447,7 @@ void Dos::int21() {
             m_.log("DOS read char %02X\n", r.r8(0));
             return;
         }
-        case 0x02: m_.log("DOS putc '%c'\n", r.r8(2)); return;
+        case 0x02: m_.tty_out(r.r8(2)); return;
         case 0x06:
             if (r.r8(2) == 0xFF) {
                 uint16_t k;
@@ -456,7 +456,7 @@ void Dos::int21() {
                 r.r8(0) = uint8_t(k);
                 if (!r.r8(0)) pending_scan_ = uint8_t(k >> 8);
                 m_.set_return_flag(ZF, false);
-            } else m_.log("DOS putc '%c'\n", r.r8(2));
+            } else m_.tty_out(r.r8(2));
             return;
         case 0x0C: {  // flush buffer, then run function AL
             uint16_t k;
@@ -473,6 +473,7 @@ void Dos::int21() {
                 s += c;
             }
             m_.log("DOS print \"%s\"\n", s.c_str());
+            for (char c : s) m_.tty_out(uint8_t(c));
             return;
         }
         case 0x0B: r.r8(0) = (m_.key_available() || pending_scan_) ? 0xFF : 0x00; return;
@@ -549,6 +550,7 @@ void Dos::int21() {
                 std::string s;
                 for (uint16_t i = 0; i < r.r[CX]; i++) s += char(mem.read8(Memory::linear(r.s[DS], uint16_t(r.r[DX] + i))));
                 m_.log("DOS write(%u) \"%s\"\n", r.r[BX], s.c_str());
+                for (char c : s) m_.tty_out(uint8_t(c));
                 r.r[AX] = r.r[CX];
                 return ok();
             }

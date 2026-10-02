@@ -188,6 +188,21 @@ std::string Machine::text_screen() {
     return out;
 }
 
+void Machine::tty_out(uint8_t al) {
+    uint8_t col = mem.read8(Memory::linear(kBda, kCursorPos)), row = mem.read8(Memory::linear(kBda, kCursorPos + 1));
+    if (al == 0x0D) col = 0;
+    else if (al == 0x0A) row++;
+    else if (al == 0x08) { if (col) col--; }
+    else if (al == 0x07) {}
+    else {
+        text_put(al, 0, false);
+        if (++col >= 80) { col = 0; row++; }
+    }
+    if (row >= 25) { text_scroll(1, 0x07, 0, 0, 24, 79, true); row = 24; }
+    mem.write8(Memory::linear(kBda, kCursorPos), col);
+    mem.write8(Memory::linear(kBda, kCursorPos + 1), row);
+}
+
 void Machine::int10() {
     Regs& r = cpu.regs;
     uint8_t ah = r.r8(4), al = r.r8(0);
@@ -230,17 +245,7 @@ void Machine::int10() {
             break;
         }
         case 0x0E:
-            if (al == 0x0D) col = 0;
-            else if (al == 0x0A) row++;
-            else if (al == 0x08) { if (col) col--; }
-            else if (al == 0x07) {}
-            else {
-                text_put(al, 0, false);
-                if (++col >= 80) { col = 0; row++; }
-            }
-            if (row >= 25) { text_scroll(1, 0x07, 0, 0, 24, 79, true); row = 24; }
-            mem.write8(Memory::linear(kBda, kCursorPos), col);
-            mem.write8(Memory::linear(kBda, kCursorPos + 1), row);
+            tty_out(al);
             break;
         case 0x0F:
             r.r8(0) = mem.read8(Memory::linear(kBda, kVideoMode));
@@ -342,10 +347,17 @@ void Machine::block_and_retry() {
 }
 
 void Machine::setup_ports() {
-    // PIT.
+    // PIT channel 0: counts down at 1.193182 MHz in virtual time.
     port_out[0x43] = [this](uint8_t v) {
-        if ((v >> 6) == 0) pit_write_phase_ = 0;  // channel 0 mode set
-        log("PIT mode %02X\n", v);
+        if ((v >> 6) != 0) return;            // only channel 0 is modelled
+        if (((v >> 4) & 3) == 0) {            // counter latch command
+            pit_latched_ = true;
+            pit_latch_value_ = pit_count();
+            pit_read_phase_ = 0;
+            return;
+        }
+        pit_write_phase_ = 0;
+        pit_read_phase_ = 0;
     };
     port_out[0x40] = [this](uint8_t v) {
         if (pit_write_phase_ == 0) {
@@ -354,10 +366,18 @@ void Machine::setup_ports() {
         } else {
             pit_reload_ = uint16_t(pit_latch_lo_ | (v << 8));
             pit_write_phase_ = 0;
+            pit_base_us_ = now_us();
+            next_tick_us_ = pit_base_us_ + tick_period_us();
             log("PIT ch0 reload %u (%.1f Hz)\n", pit_reload_, 1193182.0 / (pit_reload_ ? pit_reload_ : 65536));
         }
     };
-    port_in[0x40] = [this]() -> uint8_t { return uint8_t(now_us()); };
+    port_in[0x40] = [this]() -> uint8_t {
+        uint16_t v = pit_latched_ ? pit_latch_value_ : pit_count();
+        uint8_t out = pit_read_phase_ == 0 ? uint8_t(v) : uint8_t(v >> 8);
+        if (pit_read_phase_ == 1) pit_latched_ = false;
+        pit_read_phase_ ^= 1;
+        return out;
+    };
     port_out[0x42] = [](uint8_t) {};
     port_in[0x61] = []() -> uint8_t { return 0x00; };
     port_out[0x61] = [](uint8_t) {};
@@ -367,11 +387,25 @@ void Machine::setup_ports() {
     port_out[0x21] = [this](uint8_t v) { pic_mask_ = v; };
     // Keyboard controller data: last scan code.
     port_in[0x60] = []() -> uint8_t { return 0; };
-    // VGA input status: toggle retrace (bit 3) and display enable (bit 0).
+    // VGA input status (mode 13h timing: 70.086 Hz, 449 lines of 31.778 us,
+    // 400 visible). Bit 0: display disabled (hblank or vblank); bit 3:
+    // vertical retrace (lines 412-413).
     port_in[0x3DA] = [this]() -> uint8_t {
-        uint64_t t = now_us() % 14286;  // ~70 Hz frame
-        return t < 1000 ? 0x09 : 0x00;
+        // Use sub-microsecond time so line-level toggles are visible.
+        uint64_t ns = cpu.instructions * 1000000 / ips_per_ms;
+        uint64_t frame_ns = 14268000;
+        uint64_t t = ns % frame_ns;
+        uint32_t line = uint32_t(t / 31778);
+        uint32_t in_line = uint32_t(t % 31778);
+        bool vretrace = line >= 412 && line < 414;
+        bool disabled = line >= 400 || in_line >= 25422;
+        return uint8_t((disabled ? 0x01 : 0) | (vretrace ? 0x08 : 0));
     };
+    // CGA/sequencer writes from the drivers: accept silently.
+    port_out[0x3D8] = [](uint8_t) {};
+    port_out[0x3C4] = [this](uint8_t v) { seq_index_ = v; };
+    port_out[0x3C5] = [this](uint8_t v) { seq_[seq_index_ & 7] = v; };
+    port_in[0x3C5] = [this]() -> uint8_t { return seq_[seq_index_ & 7]; };
     // VGA DAC.
     port_out[0x3C8] = [this](uint8_t v) { dac_write_index_ = v; dac_write_phase_ = 0; };
     port_out[0x3C7] = [this](uint8_t v) { dac_read_index_ = v; dac_read_phase_ = 0; };
@@ -387,6 +421,12 @@ void Machine::setup_ports() {
     // Joystick: no joystick (one-shots never time out, buttons released).
     port_in[0x201] = []() -> uint8_t { return 0xFF; };
     port_out[0x201] = [](uint8_t) {};
+}
+
+uint16_t Machine::pit_count() const {
+    uint64_t ticks = (now_us() - pit_base_us_) * 1193182 / 1000000;
+    uint32_t period = pit_reload_ ? pit_reload_ : 65536;
+    return uint16_t(period - ticks % period);
 }
 
 void Machine::service_timer() {

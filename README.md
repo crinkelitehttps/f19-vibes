@@ -68,6 +68,13 @@ python3 native/tools/sst_fetch.py build/sst
 build/native/sst_runner build/sst/*.bin
 ```
 
+Play it natively (SDL3 window). The game directory must be a writable copy:
+
+```
+mkdir -p out/run/native && cp fullgame/* out/run/native/ && chmod -R u+w out/run/native
+build/native/f19 out/run/native            # options: --scale N, --mips N, --trace
+```
+
 Headless bring-up runner (boots F19.COM, traces DOS/BIOS calls):
 
 ```

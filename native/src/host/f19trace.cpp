@@ -3,7 +3,10 @@
 //
 // Usage: f19trace GAMEDIR [-p PROGRAM] [-a ARGS] [-n MILLIONS] [-t] [-s OUT.ppm] [-k KEYS]
 //   -k KEYS: keys to type, one per emulated second ('\n' = Enter).
+#include <algorithm>
 #include <cctype>
+#include <map>
+#include <vector>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -46,12 +49,13 @@ int main(int argc, char** argv) {
     }
     std::string program = "F19.COM", args, shot, keys;
     double millions = 50;
-    bool trace = false;
+    bool trace = false, prof = false;
     for (int i = 2; i < argc; i++) {
         if (!std::strcmp(argv[i], "-p") && i + 1 < argc) program = argv[++i];
         else if (!std::strcmp(argv[i], "-a") && i + 1 < argc) args = argv[++i];
         else if (!std::strcmp(argv[i], "-n") && i + 1 < argc) millions = std::atof(argv[++i]);
         else if (!std::strcmp(argv[i], "-t")) trace = true;
+        else if (!std::strcmp(argv[i], "-P")) prof = true;
         else if (!std::strcmp(argv[i], "-s") && i + 1 < argc) shot = argv[++i];
         else if (!std::strcmp(argv[i], "-k") && i + 1 < argc) keys = argv[++i];
     }
@@ -64,8 +68,12 @@ int main(int argc, char** argv) {
     uint64_t total = uint64_t(millions * 1e6);
     uint64_t slice = uint64_t(m.ips_per_ms) * 1000;  // one emulated second
     size_t k = 0;
+    std::map<uint32_t, uint64_t> profile;   // CS:IP>>4 buckets, sampled
     while (!m.exited && m.cpu.instructions < total) {
-        m.run(slice);
+        for (uint64_t done = 0; done < slice && !m.exited; done += 997) {
+            m.run(997);
+            profile[(uint32_t(m.cpu.regs.s[CS]) << 16) | (m.cpu.regs.ip & 0xFFF0)]++;
+        }
         if (k < keys.size()) {
             char c = keys[k++];
             m.key_press(scan_for(c), c == '\n' ? 0x0D : uint8_t(c));
@@ -76,6 +84,14 @@ int main(int argc, char** argv) {
                  m.stop_reason.empty() ? "budget reached" : m.stop_reason.c_str());
     std::fprintf(stderr, "CPU at %04X:%04X\n", m.cpu.regs.s[CS], m.cpu.regs.ip);
     if (!shot.empty()) screenshot(m, shot.c_str());
+    if (prof) {
+        std::vector<std::pair<uint64_t, uint32_t>> top;
+        for (auto [k2, n] : profile) top.emplace_back(n, k2);
+        std::sort(top.rbegin(), top.rend());
+        for (size_t i = 0; i < top.size() && i < 12; i++)
+            std::fprintf(stderr, "  %04X:%04Xx %6.2f%%\n", top[i].second >> 16, top[i].second & 0xFFFF,
+                         100.0 * top[i].first / (m.cpu.instructions / 997.0));
+    }
     uint8_t mode = m.mem.read8(0x449);
     std::fprintf(stderr, "video mode %02X\n", mode);
     if (mode <= 3) std::fprintf(stderr, "%s", m.text_screen().c_str());
