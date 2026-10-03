@@ -199,6 +199,7 @@ int main(int argc, char** argv) {
             };
             save(hires_shot, true);
             save(hires_shot + ".world.ppm", false);
+            gr.draw_overlay = true;
             for (auto [suffix, yaw, pitch] : {std::tuple{".cockpit3d.ppm", 0.0f, 0.0f}, std::tuple{".cockpit3d-look.ppm", 0.35f, -0.15f}}) {
                 GLuint tex;
                 if (gr.render_cockpit3d(*frame, 1280, 720, yaw, pitch, &tex)) {
