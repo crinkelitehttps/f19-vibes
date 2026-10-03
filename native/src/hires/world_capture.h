@@ -14,15 +14,21 @@
 
 #include <array>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <set>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace f19 {
 
 class Machine;
 class MGraphicNative;
+class ShapeCache;
+struct Scene;
+struct SceneInstance;
+struct SceneShape;
 
 struct HiresProj {
     float cx, cy;        // projection centre (viewport-local, 320x200 units)
@@ -36,6 +42,7 @@ struct HiresPrim {
     uint8_t color = 0;       // palette index
     uint8_t color2 = 0;      // horizon: ground colour
     uint32_t object = 0;     // shape instance the primitive belongs to
+    int8_t flat = -1;        // 1: ground decal (no depth write), 0: solid, -1: decide from geometry
     HiresProj proj;
     std::vector<std::array<float, 3>> v;  // camera space (x right, y up, z forward)
     // Horizon: screen-space line point M, sky direction U (local coords),
@@ -53,12 +60,20 @@ struct HiresFrame {
     std::vector<uint8_t> mask;   // 1 = pixel last written by world drawing
     uint8_t dac[256][3] = {};
     uint64_t time_us = 0;
+    // Native scene for the main view (null if the engine was not found or
+    // no main view was drawn this frame).
+    std::shared_ptr<const Scene> scene;
 };
 
 class WorldCapture {
 public:
     WorldCapture(Machine& m, MGraphicNative& gfx);
+    ~WorldCapture();
     bool enabled = true;
+    // Native scene: terrain tiles enumerated around the camera, per level
+    // (1-4) out to this many tiles in every direction.
+    int terrain_radius[5] = {0, 6, 6, 6, 6};
+    uint64_t scene_stats[4] = {};   // frames, terrain instances, dynamic instances, overrides
     bool active() const { return found_; }
     std::shared_ptr<const HiresFrame> latest() const { return latest_; }
     std::string status;  // what was found, for logging
@@ -85,6 +100,35 @@ private:
     bool world_flag_ = false;
     uint32_t object_ = 0;
 
+    // Scene capture (see scene.h).
+    std::unique_ptr<ShapeCache> shapes_;
+    bool scene_found_ = false;
+    uint16_t angle_[3] = {}, cam_off_[3] = {}, matrix_ = 0, lod_table_ = 0, lod_shift_ = 0, anim_ = 0, night_ = 0;
+    uint16_t color_table_ = 0, level_ = 0, lists_ = 0, counts_ = 0, enable_ = 0, sizes_ = 0;
+    uint16_t map4_ = 0, map3_ = 0, exp3_ = 0, exp2_ = 0, exp1_ = 0, shape_table_ = 0;
+    uint16_t shared_[6] = {};   // xi, yi, zi, xv, yv, zv
+    uint32_t shape_seg_lin_ = 0, terrain_lo_ = 0;
+    int32_t cam_world_[3] = {};
+    std::shared_ptr<Scene> scene_;
+    std::vector<SceneInstance> dynamic_;
+    int pending_shift_ = -1000;   // object_draw scale argument, until its shape draw
+    bool pending_skip_ = false;   // that draw comes from the object list (drawn natively)
+    // Object list (aircraft, ships, vehicles) and the object routine's camera.
+    uint16_t oc_x1_ = 0, oc_y1_ = 0, oc_a1_ = 0, oc_view_ = 0, oc_x2_ = 0, oc_y2_ = 0, oc_a2_ = 0, oc_zoom_ = 0;
+    uint16_t code_theatre_ = 0, code_stflt_ = 0, code_add_ = 0;
+    uint16_t list_count_ = 0, list_base_ = 0, list_codes_ = 0, list_type_ = 0;
+    uint32_t list_draw_ret_ = 0;
+    int list_p10_ = 2;
+    bool objects_found_ = false;
+    uint32_t shape_code(uint16_t code, uint16_t seg) const;
+    void add_object_list(Scene& sc, uint16_t shape_seg);
+    std::map<std::tuple<int, int, int, int>, uint32_t> overrides_;   // (level, tx, ty, index) -> shape
+
+    void on_terrain();
+    void on_shape_draw();
+    int tile_type(int level, int x, int y) const;
+    int32_t level_coord(int level, int32_t v) const;
+    std::shared_ptr<const SceneShape> shape_at(uint32_t linear);
     void on_program(const std::string& name, uint16_t seg, uint32_t size);
     HiresProj proj_state() const;
     std::array<float, 3> vertex(int v) const;

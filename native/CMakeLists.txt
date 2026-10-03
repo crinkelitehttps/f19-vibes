@@ -16,6 +16,7 @@ add_library(f19core STATIC
   src/core/dos.cpp
   src/drivers/mgraphic.cpp
   src/hires/world_capture.cpp
+  src/hires/scene.cpp
 )
 target_include_directories(f19core PUBLIC src)
 

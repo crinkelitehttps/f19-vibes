@@ -33,6 +33,10 @@ public:
     float line_width = 0.75f;    // in 320x200 pixels
     bool draw_overlay = true;    // false: world only (debugging)
     bool depth = true;           // per-pixel occlusion between solid objects
+    // 3D view: draw the world from the native scene (all directions, our
+    // own level of detail) instead of the engine's captured primitives.
+    bool native_world = true;
+    float lod_detail = 1.0f;     // > 1 keeps detailed models farther away
 
     // Composited frame at w x h; returns a texture valid until the next call.
     GLuint render_frame(const HiresFrame& f, int w, int h);
@@ -74,6 +78,7 @@ private:
     // Consecutive primitives of one object within one viewport.
     struct Group { int first, count; int run; uint32_t object; bool flat, background; };
     std::vector<Group> groups_;
+    std::vector<HiresPrim> scene_prims_;
 
     GLuint world_prog_ = 0, tex_prog_ = 0;
     GLint world_size_loc_ = -1, tex_rect_loc_ = -1, tex_sampler_loc_ = -1;

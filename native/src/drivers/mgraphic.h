@@ -43,6 +43,7 @@ public:
     uint16_t page_seg(int i) const { return page(uint16_t(i)); }
     uint16_t current_origin() const { return origin(); }
     uint16_t current_draw_seg() const { return draw_seg(); }
+    int current_slot() const { return current_slot_; }
     bool attached() const { return cs_ != 0; }
 
 private:

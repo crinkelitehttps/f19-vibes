@@ -4,6 +4,9 @@
 // In the cockpit view the world is rendered in 3D with the instrument panel
 // as a surface in the cockpit (F11 toggles; --flat-cockpit starts with the
 // original 2D layout). Hold the right mouse button and drag to look around.
+// The 3D world is drawn from the game's own shape and terrain data in every
+// direction (Shift+F11 switches to the engine's captured primitives, which
+// only cover its forward view).
 // Head tracking: OpenTrack's "UDP over network" output, received on
 // 127.0.0.1:4242 by default (--headtrack-port 0 disables, --headtrack-bind
 // ADDR to accept it from another machine); mouse look adds to it.
@@ -14,7 +17,10 @@
 // Set F19_PERF=1 for a once-a-second timing summary.
 //
 // Usage: f19 [GAMEDIR] [--scale N] [--mips N] [--msaa N] [--vga-hz HZ] [--headtrack-port N] [--headtrack-bind ADDR]
-//            [--trace] [--original-driver] [--verify-driver] [--lowres]
+//            [--trace] [--original-driver] [--verify-driver] [--lowres] [--lod-detail F] [--terrain-radius N]
+//   --lod-detail F: > 1 keeps detailed models farther away (default 1 =
+//   switch at the same on-screen size as the original). --terrain-radius N:
+//   terrain tiles drawn in every direction per level (default 6).
 //   The 3D world is rendered at the window's resolution unless --lowres
 //   (needs the native driver).
 //   GAMEDIR defaults to the current directory; it must be writable (the
@@ -214,6 +220,8 @@ int main(int argc, char** argv) {
     int headtrack_port = 4242;
     std::string headtrack_bind = "127.0.0.1";
     bool trace = false, original_driver = false, verify_driver = false, lowres = false, no_depth = false;
+    float lod_detail = 1.0f;
+    int terrain_radius = 6;
     for (int i = 1; i < argc; i++) {
         if (!std::strcmp(argv[i], "--scale") && i + 1 < argc) scale = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--mips") && i + 1 < argc) mips = std::atof(argv[++i]);
@@ -227,6 +235,8 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--flat-cockpit")) flat_cockpit = true;
         else if (!std::strcmp(argv[i], "--headtrack-port") && i + 1 < argc) headtrack_port = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--headtrack-bind") && i + 1 < argc) headtrack_bind = argv[++i];
+        else if (!std::strcmp(argv[i], "--lod-detail") && i + 1 < argc) lod_detail = float(std::atof(argv[++i]));
+        else if (!std::strcmp(argv[i], "--terrain-radius") && i + 1 < argc) terrain_radius = std::max(1, std::atoi(argv[++i]));
         else dir = argv[i];
     }
 
@@ -245,6 +255,7 @@ int main(int argc, char** argv) {
     // High-resolution world rendering: capture the engine's 3D geometry.
     WorldCapture capture(m, native_gfx);
     capture.enabled = !lowres && !original_driver;
+    for (int l = 1; l <= 4; l++) capture.terrain_radius[l] = terrain_radius;
     if (!m.dos->start_program("F19.COM", "")) {
         std::fprintf(stderr,
                      "cannot start F19.COM in '%s'\n"
@@ -278,6 +289,7 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "OpenGL: %s\n", reinterpret_cast<const char*>(gl::GetString(GL_RENDERER)));
     GlRenderer renderer;
     renderer.msaa = msaa;
+    renderer.lod_detail = lod_detail;
     renderer.depth = !no_depth;
     if (!renderer.init()) std::fprintf(stderr, "warning: renderer initialisation reported a GL error\n");
     std::shared_ptr<const HiresFrame> shown_frame;
@@ -365,7 +377,13 @@ int main(int argc, char** argv) {
             }
             if (ev.type == SDL_EVENT_KEY_UP && ev.key.scancode == SDL_SCANCODE_F12) continue;
             if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.scancode == SDL_SCANCODE_F11 && !ev.key.repeat) {
-                cockpit3d = !cockpit3d;
+                // F11: 3D / flat; Shift+F11: native world / engine's primitives.
+                if (ev.key.mod & SDL_KMOD_SHIFT) {
+                    renderer.native_world = !renderer.native_world;
+                    std::fprintf(stderr, "world: %s\n", renderer.native_world ? "native scene" : "engine primitives");
+                } else {
+                    cockpit3d = !cockpit3d;
+                }
                 continue;
             }
             if (ev.type == SDL_EVENT_KEY_UP && ev.key.scancode == SDL_SCANCODE_F11) continue;

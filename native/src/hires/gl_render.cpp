@@ -6,6 +6,8 @@
 #include <cmath>
 #include <map>
 
+#include "hires/scene.h"
+
 namespace f19 {
 
 using namespace gl;
@@ -513,14 +515,24 @@ bool GlRenderer::render_cockpit3d(const HiresFrame& f, int w, int h, const HeadP
     (void)aspect;
     M3 H = head_matrix(head.yaw, head.pitch, head.roll), V = transpose(H);  // V: aircraft -> view
 
-    // World primitives of the main view, projected by our camera.
+    // World primitives of the main view, projected by our camera: the
+    // native scene, or the engine's captured primitives.
     verts_.clear();
     runs_.clear();
     groups_.clear();
+    const std::vector<HiresPrim>* prims = &f.prims;
+    if (native_world && f.scene) {
+        SceneBuildParams sp;
+        // The engine's LOD distances suit its 256-pixel focal length; scale
+        // them to ours so models switch at the same on-screen size.
+        sp.lod_scale = std::max(1.0f, focal / 256.0f) * lod_detail;
+        build_scene_prims(*f.scene, sp, scene_prims_);
+        prims = &scene_prims_;
+    }
     std::map<uint32_t, std::vector<const HiresPrim*>> by_object;
-    for (const HiresPrim& p : f.prims) by_object[p.object].push_back(&p);
+    for (const HiresPrim& p : *prims) by_object[p.object].push_back(&p);
     std::map<uint32_t, bool> flat;
-    for (auto& [obj, list] : by_object) flat[obj] = object_is_flat(list);
+    for (auto& [obj, list] : by_object) flat[obj] = list.front()->flat >= 0 ? list.front()->flat == 1 : object_is_flat(list);
     runs_.push_back(Run{0, 0, 0, 0, w, h});
     auto color = [&](uint8_t c) { return std::array<float, 4>{f.dac[c][0] / 63.0f, f.dac[c][1] / 63.0f, f.dac[c][2] / 63.0f, 1.0f}; };
     auto tri_fan = [&](const std::vector<P2>& pts, std::array<float, 4> c) {
@@ -532,10 +544,10 @@ bool GlRenderer::render_cockpit3d(const HiresFrame& f, int w, int h, const HeadP
         return P2{w * 0.5f + focal * v[0] / v[2], h * 0.5f - focal * v[1] / v[2], kNearZ / v[2]};
     };
     const float lw = std::max(1.0f, line_width * float(w) / 320.0f);
-    for (const HiresPrim& p : f.prims) {
+    for (const HiresPrim& p : *prims) {
         if (!(p.proj.ox == 0 && p.proj.oy == 0 && p.proj.vp_w >= 320)) continue;  // sub-views live on the panel
         if (p.kind == HiresPrim::Horizon) continue;                              // sky shader instead
-        bool is_flat = p.kind == HiresPrim::Dot || flat[p.object];
+        bool is_flat = p.flat >= 0 ? p.flat == 1 : (p.kind == HiresPrim::Dot || flat[p.object]);
         if (groups_.empty() || groups_.back().object != p.object || groups_.back().flat != is_flat)
             groups_.push_back(Group{int(verts_.size()), 0, 0, p.object, is_flat, false});
         std::vector<std::array<float, 3>> vv;

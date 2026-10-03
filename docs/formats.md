@@ -95,6 +95,15 @@ u8  size_class                    indexes cull/LOD distance tables
 body
 ```
 
+Per-object cull and LOD (`FUN_082C` -> `08B0`, `09B1`): the object's
+origin is rotated into camera space (hi words = instance units); it is
+dropped if depth > `[8FE]`, depth < `[90E + 2*size]`, or outside the 64°
+frustum padded by a per-size margin (`[9BBC]`/`[9BC0]` tables). LOD walks
+the records while `(dist >> [5B2C]) > [8EE + 2*level]`, dist = |Z| +
+(|X| + |Y|)/4. Bodies without the 0x40 flag whose object lies on the ground
+are drawn at once (painter order); the rest are depth-sorted and drawn
+after the terrain.
+
 Body — first byte decides the kind (after an optional prefix byte with
 `(b & 0x60) == 0x60`, whose low 2 bits select an axis snapped to ground):
 

@@ -172,8 +172,9 @@ when `[9B2]` ≤ 0x1F0B; view mode 2 draws sky only).
 
 World tagging: the back page is watched (memory write tags); a native
 driver call is "world" when the engine makes it after a capture hook,
-until a driver call from elsewhere or an engine 2D entry (C line, rect
-fill). At each flip (slot 44) the frame = primitives + page + mask.
+until a drawing driver call from elsewhere or an engine 2D entry (C line,
+rect fill). Non-drawing calls from elsewhere do not end the run: the timer
+interrupt's palette call (slot 46) lands in the middle of engine drawing. At each flip (slot 44) the frame = primitives + page + mask.
 `HiresRenderer` draws the primitives in the engine's order with SDL3's
 geometry API at window resolution, then the page with world pixels
 transparent. Checked against the engine's own output frame by frame
@@ -220,8 +221,43 @@ viewport, page columns 45-275 = the HUD frame) is an upright quad facing the
 seat, 0.6 wide, ahead of and above the panel, with its crosshair (page pixel
 159.5, 58.5) straight ahead at distance 1.25: the screen centre at neutral
 head pose. It is fixed to the cockpit, not conformal to the world.
-Limitation for freelook: the engine only draws objects inside its own
-forward view, so looking far aside shows sky/ground but no objects.
+
+Native scene (`scene.cpp`, default in the 3D view; Shift+F11 switches to
+the captured primitives): the world is drawn from the game's shape and
+terrain data instead of the engine's output, which only covers its own
+forward frustum and tiles ahead. Per frame `WorldCapture` records, at the
+terrain loop's entry (demo `1000:03D0`, main view only), the camera's world
+position and view matrix (`[9B8]`, 9 Q15 words), and builds:
+
+- terrain: every tile within `--terrain-radius` (default 6) tiles of the
+  camera at each level 1-4, all directions, from the engine's tile tables
+  and per-type object lists in memory (lookup as `FUN_0848`, level
+  coordinates as `FUN_07C6`; level 4 repeats the base map's border beyond
+  it). State-dependent objects (shape bit 7, e.g. destroyed) use the shape
+  the engine last chose for that tile slot (seen at its shape draw entry).
+- the main object list (aircraft, ships, vehicles; 0x24-byte records,
+  demo `[87AA]-0x16`, count `[95B2]`), placed with the object routine's
+  arithmetic (`FUN_CA58`) but without its forward-cone test, so they also
+  appear beside and behind; the engine's own draws from that loop are
+  skipped. Other dynamic objects (own aircraft in external views, weapons,
+  shadows) are taken from the engine's shape draw calls (`FUN_082C`).
+
+Shapes are parsed from memory (`ShapeCache`, by address; shared vertices
+from the theatre table in DGROUP). Rendering follows the engine's maths:
+camera space `M^T u` with u = (x, z, y), rotated objects `C = D M` with D
+from the three angles (`1FE6:1425`), face visibility from the eye in object
+space (`-D u`), colours through the remap table plus the night/haze offset
+(`[8DC]`, from depth and size class). Level of detail uses the engine's
+distance estimate and thresholds (`[8EE]`), divided by our focal length /
+256 so models switch at the same on-screen size (`--lod-detail F` keeps
+detail F times farther). Ground lights are dropped beyond depth 0x2400
+(about two tiles, as in the original). Ground objects keep the engine's
+painter order (level 4 to 1, far tiles first); the rest are depth-tested.
+Building the scene takes about 0.2-0.4 ms per frame (~1500 instances).
+
+Not yet native: the far "dot" the engine draws in 2D for distant list
+objects (stays on the HUD layer), the carrier wake, smoke and other
+non-shape effects.
 
 Head tracking (`native/src/host/headtrack.cpp`): OpenTrack's "UDP over
 network" output (six little-endian doubles per datagram: x, y, z in cm,
@@ -260,7 +296,8 @@ Working:
   stages in the interpreter, native MGRAPHIC driver (80/84 slots, verified),
   OpenGL renderer, emulation on its own thread (25 MIPS default, VGA refresh
   = display refresh).
-- High-res 3D world (MSAA, object depth) via engine capture; cockpit view
+- High-res 3D world (MSAA, object depth): native scene in all directions
+  (shapes and terrain from the game's data), engine capture as fallback; cockpit view
   as a 3D scene (panel as a tilted textured quad, HUD upright above it); widescreen
   external views; F11 toggles 3D/flat; right-drag mouse look; OpenTrack
   UDP head tracking (6DOF; confirmed live with OpenTrack and the laptop
@@ -271,11 +308,12 @@ Working:
   -n 380 lands on a cockpit frame, -n 330 now gives an external view).
 
 Open / next:
-- Freelook beyond ~±51°: the engine culls outside its frustum; needs the
-  engine to produce geometry for other directions (e.g. extra engine passes
-  with rotated camera, or widening its cull tables at 0x9BBC/0x9BC0).
-- Ground colour outside engine geometry is the engine ground colour (green)
-  even over sea.
+- Native scene: confirmed live in the full game (2026-10-03). Still to
+  check: other theatres, night missions. Next: smooth motion by interpolating
+  instances between engine frames; GPU-resident meshes if more draw
+  distance is wanted.
+- `f19trace` runs are not reproducible (flip counts vary between identical
+  runs, also without the scene hooks): something reads host time.
 - HUD in the 3D cockpit is the upscaled 320x200 pixels; sharper later by
   capturing the HUD's driver line/text calls instead of pixels.
 - Carrier wake not captured (another fill path); distant thin land slivers.

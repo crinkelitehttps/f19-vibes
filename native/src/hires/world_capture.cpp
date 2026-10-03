@@ -3,12 +3,14 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
+#include <algorithm>
 #include <cstring>
 #include <optional>
 #include <set>
 
 #include "core/machine.h"
 #include "drivers/mgraphic.h"
+#include "hires/scene.h"
 
 namespace f19 {
 
@@ -65,9 +67,50 @@ const char* kCLine = "e8 0d 00 cb 55 56 57 06 e8 05 00 07 5f 5e 5d cb";
 // Rectangle fill called from C (2D, e.g. the TrackCam background).
 const char* kRectFill = "55 8b ec 57 56 55 1e 07 9a ?? ?? ?? ?? 50 8b 5e 06 8b 07 9a";
 
+// Scene capture (see scene.h; offsets of the operands read are noted).
+// Shape draw entry (far): stack = shape far ptr, 3 angles, x, y, z.
+const char* kShapeDraw = "55 8b ec 56 57 8b 46 0a a3 ?? ?? 8b 46 0c a3 ?? ?? 8b 46 0e a3 ?? ?? c4 76 06 89 36 ?? ?? "
+                         "8c 06 ?? ?? 26 ac a2 ?? ?? 8b 5e 12 2b 1e ?? ?? 89 1e ?? ?? 8b 4e 14 2b 0e ?? ?? 89 0e ?? ?? "
+                         "8b 6e 10 2b 2e ?? ??";  // angles 9/15/21, camera y 44, z 55, x 66
+const char* kCull = "56 a1 ?? ?? f7 eb 8b fa 8b f0 a1 ?? ?? f7 e9 03 f0 13 fa a1 ?? ?? f7 ed";  // matrix 20
+const char* kLod = "26 8a 04 a8 80 74 21 25 07 00 d1 e0 8b d8 a1 ?? ?? 8a 0e ?? ?? d3 f8 3b 87 ?? ??";  // shift 19, table 25
+const char* kAnim = "26 ac 25 03 00 d1 e0 8b d8 a1 ?? ?? 89 87 ?? ??";  // 10
+const char* kShadeFlag = "8a 26 ?? ?? 0a e4 74 28 a0 ?? ?? 98 f6 d4 22 c4 2a e4 d1 e8";  // 2
+const char* kShared = "26 ac 2a e4 8b f8 8a 9d ?? ?? 2a ff d1 e3 8b 8f ?? ?? 8a 9d ?? ?? 2a ff d1 e3 8b 87 ?? ?? "
+                      "a3 ?? ?? 8a 9d ?? ?? 2a ff d1 e3 8b 9f ?? ??";  // zi 8, zv 16, yi 20, yv 28, xi 35, xv 43
+// Terrain loop entry (near): heading, pitch, camera x, y, z (32-bit each).
+const char* kTerrain = "55 8b ec 83 ec 1c 56 8b 46 08 8b 56 0a a3 ?? ?? 89 16 ?? ?? 8b 46 0c 8b 56 0e a3";
+const char* kTerrainLists = "a3 ?? ?? 8b 76 e6 d1 e6 8b 1e ?? ?? b1 06 d3 e3 8b 80 ?? ?? a3 ?? ?? c7 46 f6 00 00 eb 48 "
+                            "8b 1e ?? ?? 8a 5f 06 2a ff d1 e3 8b 87 ?? ?? 05 00 00 a3 ?? ?? c7 06 ?? ?? ?? ??";
+                            // level 10, lists 18, shape table 43, shape segment 55
+const char* kTerrainCounts = "8b 46 f6 39 80 ?? ?? 77 03";  // 5
+const char* kTerrainEnable = "83 3e ?? ?? 01 7d 03 e9 ?? ?? 8b 1e ?? ?? d1 e3 83 bf ?? ?? 00";  // 18
+const char* kTileSizes = "8b b7 ?? ?? 39 76 06";  // 2
+const char* kTileL4 = "8b 76 08 b1 03 d3 e6 8b 5e 06 8a 80 ?? ??";  // 12
+const char* kTileL3 = "8b 76 08 b1 04 d3 e6 8b 5e 06 8a 80 ?? ??";  // 12
+const char* kTileExp3 = "b8 03 00 50 e8 ?? ?? 83 c4 06 b1 04 d3 e0 8b 76 08 83 e6 03 d1 e6 d1 e6 03 f0 8b 5e 06 83 e3 03 8a 80 ?? ??";
+const char* kTileExp2 = "b8 02 00 50 e8 ?? ?? 83 c4 06 b1 04 d3 e0 8b 76 08 83 e6 03 d1 e6 d1 e6 03 f0 8b 5e 06 83 e3 03 8a 80 ?? ??";
+const char* kTileExp1 = "b8 01 00 50 e8 ?? ?? 83 c4 06 b1 04 d3 e0 8b 76 08 83 e6 03 d1 e6 d1 e6 03 f0 8b 5e 06 83 e3 03 8a 80 ?? ??";  // 34
+// Dynamic object draw (near, 10 args; arg 10 = scale shift).
+const char* kObjectDraw = "55 8b ec 83 ec 10 ff 76 04 e8 ?? ?? 83 c4 02 89 46 fc 80 3e ?? ?? 00 75 05 a1";
+// Its camera arithmetic (x1 26, y1 46, alt1 70, view flags 77, x2 91, y2 104, alt2 129, zoom 136).
+const char* kObjectCamera = "80 3e ?? ?? 00 75 05 a1 ?? ?? eb 03 a1 ?? ?? 89 46 fe 8b 46 06 8b 56 08 2b 06 ?? ?? 1b 16 ?? ?? "
+                            "89 46 f8 89 56 fa 8b 46 0a 8b 56 0c 03 06 ?? ?? 13 16 ?? ?? 2d 00 00 81 da 00 01 89 46 f4 89 56 f6 "
+                            "8b 46 0e 2b 06 ?? ?? 89 46 f2 f6 06 ?? ?? 80 74 34 a1 ?? ?? 8b 16 ?? ?? 2b 06 ?? ?? 1b 16 ?? ?? "
+                            "01 46 f8 11 56 fa a1 ?? ?? 8b 16 ?? ?? 2b 06 ?? ?? 1b 16 ?? ?? 01 46 f4 11 56 f6 a1 ?? ?? 2b 06 ?? ?? "
+                            "01 46 f2 80 3e ?? ??";
+// Shape code -> shape offset (theatre table 20; STFLT table 31 + offset 35).
+const char* kShapeCode = "55 8b ec f7 46 04 00 01 74 0e 8b 5e 04 83 e3 7f d1 e3 8b 87 ?? ?? eb 18 8b 5e 04 d1 e3 8b 9f ?? ?? 8d 87 ?? ??";
+// Main object list: count 1, flags field 21 (record = flags - 0x16, 0x24 bytes); its shape draw (type field 2,
+// shape code table 10; the call returns to match + 15).
+const char* kObjectList = "a1 ?? ?? 39 46 e0 7c 03 e9 ?? ?? b8 24 00 f7 6e e0 8b d8 f6 87 ?? ?? 02";
+const char* kObjectListDraw = "8b 9c ?? ?? b1 05 d3 e3 ff b1 ?? ?? e8 ?? ?? 83 c4 14";
+
 }  // namespace
 
-WorldCapture::WorldCapture(Machine& m, MGraphicNative& gfx) : m_(m), gfx_(gfx) {
+WorldCapture::~WorldCapture() = default;
+
+WorldCapture::WorldCapture(Machine& m, MGraphicNative& gfx) : m_(m), gfx_(gfx), shapes_(std::make_unique<ShapeCache>()) {
     edges_.resize(1024);
     mask_.assign(64000, 0);
     // The flight program is EXEPACK-compressed: scan for the engine once it
@@ -89,11 +132,14 @@ WorldCapture::WorldCapture(Machine& m, MGraphicNative& gfx) : m_(m), gfx_(gfx) {
         if (!found_) return false;
         const Regs& r = m_.cpu.regs;
         uint16_t ret_cs = m_.mem.read16(r.s[SS], uint16_t(r.r[SP] + 2));
-        if (ret_cs != engine_cs_) {
-            world_flag_ = false;
-            return false;
-        }
-        return world_flag_;
+        bool world = ret_cs == engine_cs_ && world_flag_;
+        // Only calls that draw end a world run: the timer interrupt's
+        // palette/shake call (slot 46) and other queries can arrive in the
+        // middle of the engine's drawing.
+        static const std::set<int> kDrawing = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 17, 18, 19, 20, 31, 36, 37, 40,
+                                               41, 42, 43, 48, 51, 52, 59, 71, 72, 73, 74};
+        if (ret_cs != engine_cs_ && kDrawing.count(gfx_.current_slot())) world_flag_ = false;
+        return world;
     };
 }
 
@@ -160,6 +206,90 @@ void WorldCapture::on_program(const std::string& name, uint16_t seg, uint32_t si
     for (uint32_t entry : {*cline, *cline + 4}) m_.add_breakpoint(entry, [this] { world_flag_ = false; return false; });
     for (uint32_t entry : find_all(mem, lo, hi, kRectFill)) m_.add_breakpoint(entry, [this] { world_flag_ = false; return false; });
     found_ = true;
+
+    // Scene capture: optional (the captured primitives remain the fallback).
+    {
+        std::string missing;
+        auto opt = [&](const char* p, const char* what) -> std::optional<uint32_t> {
+            auto hits = find_all(mem, lo, hi, p);
+            if (hits.size() != 1) missing += std::string(" ") + what;
+            return hits.size() == 1 ? std::optional<uint32_t>(hits[0]) : std::nullopt;
+        };
+        auto sd = opt(kShapeDraw, "shape_draw"), cu = opt(kCull, "cull"), lod = opt(kLod, "lod"), an = opt(kAnim, "anim"),
+             sf = opt(kShadeFlag, "shade"), sh = opt(kShared, "shared"), te = opt(kTerrain, "terrain"),
+             tl = opt(kTerrainLists, "terrain_lists"), tc = opt(kTerrainCounts, "terrain_counts"),
+             ten = opt(kTerrainEnable, "terrain_enable"), ts = opt(kTileSizes, "tile_sizes"), t4 = opt(kTileL4, "tile_l4"),
+             t3 = opt(kTileL3, "tile_l3"), e3 = opt(kTileExp3, "tile_exp3"), e2 = opt(kTileExp2, "tile_exp2"),
+             e1 = opt(kTileExp1, "tile_exp1"), od = opt(kObjectDraw, "object_draw");
+        scene_found_ = missing.empty() && !std::getenv("F19_NO_SCENE");
+        if (scene_found_) {
+            angle_[0] = w(*sd + 9);
+            angle_[1] = w(*sd + 15);
+            angle_[2] = w(*sd + 21);
+            cam_off_[0] = w(*sd + 66);
+            cam_off_[1] = w(*sd + 44);
+            cam_off_[2] = w(*sd + 55);
+            matrix_ = w(*cu + 20);
+            lod_shift_ = w(*lod + 19);
+            lod_table_ = w(*lod + 25);
+            anim_ = w(*an + 10);
+            night_ = w(*sf + 2);
+            color_table_ = w(*poly + 4);
+            shared_[0] = w(*sh + 35);   // xi
+            shared_[1] = w(*sh + 20);   // yi
+            shared_[2] = w(*sh + 8);    // zi
+            shared_[3] = w(*sh + 43);   // xv
+            shared_[4] = w(*sh + 28);   // yv
+            shared_[5] = w(*sh + 16);   // zv
+            level_ = w(*tl + 10);
+            lists_ = w(*tl + 18);
+            shape_table_ = w(*tl + 43);
+            shape_seg_lin_ = *tl + 55;   // relocated segment immediate: read at run time
+            counts_ = w(*tc + 5);
+            enable_ = w(*ten + 18);
+            sizes_ = w(*ts + 2);
+            map4_ = w(*t4 + 12);
+            map3_ = w(*t3 + 12);
+            exp3_ = w(*e3 + 34);
+            exp2_ = w(*e2 + 34);
+            exp1_ = w(*e1 + 34);
+            terrain_lo_ = *te;
+            shapes_->clear();
+            overrides_.clear();
+            m_.add_breakpoint(*te, [this] { on_terrain(); return false; });
+            m_.add_breakpoint(*sd, [this] { on_shape_draw(); return false; });
+            auto oc = opt(kObjectCamera, "object_camera"), sc = opt(kShapeCode, "shape_code"), ol = opt(kObjectList, "object_list"),
+                 old_ = opt(kObjectListDraw, "object_list_draw");
+            objects_found_ = oc && sc && ol && old_;
+            if (objects_found_) {
+                oc_x1_ = w(*oc + 26);
+                oc_y1_ = w(*oc + 46);
+                oc_a1_ = w(*oc + 70);
+                oc_view_ = w(*oc + 77);
+                oc_x2_ = w(*oc + 91);
+                oc_y2_ = w(*oc + 104);
+                oc_a2_ = w(*oc + 129);
+                oc_zoom_ = w(*oc + 136);
+                code_theatre_ = w(*sc + 20);
+                code_stflt_ = w(*sc + 31);
+                code_add_ = w(*sc + 35);
+                list_count_ = w(*ol + 1);
+                list_base_ = uint16_t(w(*ol + 21) - 0x16);
+                list_type_ = w(*old_ + 2);
+                list_codes_ = w(*old_ + 10);
+                list_draw_ret_ = *old_ + 15;
+            }
+            m_.add_breakpoint(*od, [this] {
+                const Regs& r = m_.cpu.regs;
+                uint32_t ret = Memory::linear(r.s[CS], m_.mem.read16(r.s[SS], r.r[SP]));
+                pending_shift_ = int16_t(m_.mem.read16(r.s[SS], uint16_t(r.r[SP] + 20)));
+                pending_skip_ = objects_found_ && ret == list_draw_ret_;
+                if (pending_skip_) list_p10_ = pending_shift_;
+                return false;
+            });
+        }
+        m_.log("hires: scene capture %s%s\n", scene_found_ ? "on" : "off; missing:", missing.c_str());
+    }
     char b[200];
     std::snprintf(b, sizeof b, "engine hooks set (%s): xyz %04X/%04X/%04X centre %04X/%04X edges %04X viewport %04X/%04X",
                   name.c_str(), x_tab_, y_tab_, z_tab_, cx_, cy_, edge_base_, vp_x_, vp_y_);
@@ -321,8 +451,228 @@ void WorldCapture::capture_horizon() {
     prims_.push_back(std::move(p));
 }
 
+int32_t WorldCapture::level_coord(int level, int32_t v) const {
+    // FUN_07c6: world -> level units (level 0 x2, 1 x1, 2..4 rounded /4^(L-1)).
+    switch (level) {
+        case 0: return int32_t(int64_t(v) * 2);
+        case 1: return v;
+        case 2: return int32_t((int64_t(v) + 2) >> 2);
+        case 3: return int32_t((int64_t(v) + 8) >> 4);
+        default: return int32_t((int64_t(v) + 32) >> 6);
+    }
+}
+
+// FUN_0848: tile type at (x, y) on a level's grid (0 outside it).
+int WorldCapture::tile_type(int level, int x, int y) const {
+    if (level == 4) {
+        x += 2;
+        y += 2;
+    }
+    int size = int16_t(ds16(uint16_t(sizes_ + 2 * level)));
+    if (x < 0 || y < 0 || x >= size || y >= size) return 0;
+    auto sub = [&](uint16_t tab, int parent) { return ds8(uint16_t(tab + (x & 3) + (y & 3) * 4 + parent * 16)); };
+    switch (level) {
+        case 4: return ds8(uint16_t(map4_ + x + y * 8));
+        case 3: return ds8(uint16_t(map3_ + x + y * 16));
+        case 2: return sub(exp3_, tile_type(3, x >> 2, y >> 2));
+        case 1: return sub(exp2_, tile_type(2, x >> 2, y >> 2));
+        default: return sub(exp1_, tile_type(1, x >> 2, y >> 2));
+    }
+}
+
+std::shared_ptr<const SceneShape> WorldCapture::shape_at(uint32_t linear) {
+    ShapeCache::Shared sh;
+    sh.ds = m_.cpu.regs.s[DS];
+    sh.xi = shared_[0];
+    sh.yi = shared_[1];
+    sh.zi = shared_[2];
+    sh.xv = shared_[3];
+    sh.yv = shared_[4];
+    sh.zv = shared_[5];
+    return shapes_->get(m_.mem, linear, sh);
+}
+
+// Terrain loop entry: the main view's camera. Enumerate terrain objects in
+// every direction (the engine itself only draws a 3x3 block of tiles ahead
+// per level).
+void WorldCapture::on_terrain() {
+    pending_shift_ = -1000;
+    HiresProj pj = proj_state();
+    if (!(pj.ox == 0 && pj.oy == 0 && pj.vp_w >= 320)) return;
+    const Regs& r = m_.cpu.regs;
+    auto arg = [&](int i) { return m_.mem.read16(r.s[SS], uint16_t(r.r[SP] + 2 + 2 * i)); };
+    for (int k = 0; k < 3; k++) cam_world_[k] = int32_t(arg(2 + 2 * k) | (uint32_t(arg(3 + 2 * k)) << 16));
+    auto sc = std::make_shared<Scene>();
+    for (int i = 0; i < 9; i++) sc->view[i] = float(int16_t(ds16(uint16_t(matrix_ + 2 * i)))) / 32768.0f;
+    for (int i = 0; i < 16; i++) sc->remap[i] = ds8(uint16_t(color_table_ + i));
+    for (int i = 0; i < 8; i++) sc->lod_table[i] = int16_t(ds16(uint16_t(lod_table_ + 2 * i)));
+    sc->night = ds8(night_) != 0;
+    sc->anim = int16_t(ds16(anim_));
+    uint16_t shape_seg = uint16_t(m_.mem.read8(shape_seg_lin_) | (m_.mem.read8(shape_seg_lin_ + 1) << 8));
+    auto shape_of = [&](uint8_t s) { return Memory::linear(shape_seg, ds16(uint16_t(shape_table_ + 2 * (s & 0x7F)))); };
+    int start = int16_t(ds16(view_mode_)) != 0 ? 4 : 3;
+    size_t count = 0;
+    for (int L = start; L >= 1; L--) {
+        if (ds16(uint16_t(enable_ + 2 * L)) == 0) continue;
+        int32_t cx = level_coord(L, cam_world_[0]), cy = level_coord(L, cam_world_[1]), cz = level_coord(L, cam_world_[2]);
+        if (cz < 2) cz = 2;
+        int32_t tx = cx >> 12, ty = cy >> 12;
+        int R = terrain_radius[L];
+        float scale = float(1 << (2 * (L - 1)));
+        for (int dy = -R; dy <= R; dy++)
+            for (int dx = -R; dx <= R; dx++) {
+                int x = tx + dx, y = ty + dy;
+                // Level 4 (base map): beyond the 8x8 map repeat its border.
+                int type = L == 4 ? tile_type(4, std::clamp(x, -2, 5), std::clamp(y, -2, 5)) : tile_type(L, x, y);
+                uint16_t list = ds16(uint16_t(lists_ + L * 0x40 + type * 2));
+                int n = ds16(uint16_t(counts_ + L * 0x40 + type * 2));
+                int32_t ccx = cx - (x * 0x1000 + 0x800), ccy = cy - (y * 0x1000 + 0x800);
+                for (int i = 0; i < n && i < 256; i++) {
+                    uint16_t rec = uint16_t(list + 7 * i);
+                    uint8_t s = ds8(uint16_t(rec + 6));
+                    uint32_t lin = shape_of(s);
+                    if (s & 0x80) {
+                        auto it = overrides_.find({L, x, y, i});
+                        if (it != overrides_.end()) lin = it->second;
+                    }
+                    SceneInstance in{};
+                    in.shape = shape_at(lin);
+                    in.pos[0] = int16_t(ds16(rec));
+                    in.pos[1] = int16_t(ds16(uint16_t(rec + 2)));
+                    in.pos[2] = int16_t(ds16(uint16_t(rec + 4)));
+                    in.cam[0] = ccx;
+                    in.cam[1] = ccy;
+                    in.cam[2] = cz;
+                    in.scale = scale;
+                    in.level = int8_t(L);
+                    in.order = float(dx * dx + dy * dy);
+                    sc->instances.push_back(std::move(in));
+                    count++;
+                }
+            }
+    }
+    scene_stats[1] += count;
+    if (objects_found_) add_object_list(*sc, shape_seg);
+    scene_ = std::move(sc);
+    dynamic_.clear();
+}
+
+uint32_t WorldCapture::shape_code(uint16_t code, uint16_t seg) const {
+    // FUN_cf84.
+    uint16_t off = (code & 0x100) ? ds16(uint16_t(code_theatre_ + 2 * (code & 0x7F)))
+                                  : uint16_t(ds16(uint16_t(code_stflt_ + 2 * code)) + code_add_);
+    return Memory::linear(seg, off);
+}
+
+// The main object list (aircraft, ships, vehicles), placed as the object
+// routine (FUN_ca58) places them but without the engine's forward cone
+// test, so they also appear beside and behind the view.
+void WorldCapture::add_object_list(Scene& sc, uint16_t shape_seg) {
+    bool external = ds8(oc_view_) & 0x80;
+    auto d32 = [&](uint16_t a) { return int32_t(ds16(a) | (uint32_t(ds16(uint16_t(a + 2))) << 16)); };
+    int32_t cx = d32(external ? oc_x2_ : oc_x1_), cy = d32(external ? oc_y2_ : oc_y1_);
+    int16_t calt = int16_t(ds16(external ? oc_a2_ : oc_a1_));
+    float size = std::ldexp(1.0f, 3 - list_p10_);
+    int n = int16_t(ds16(list_count_));
+    size_t added = 0;
+    for (int i = 0; i < n && i < 256; i++) {
+        uint16_t rec = uint16_t(list_base_ + 0x24 * i);
+        if (!(ds8(uint16_t(rec + 0x16)) & 2)) continue;
+        int16_t alt = int16_t(ds16(uint16_t(rec + 4)));
+        int32_t a = d32(uint16_t(rec + 6)) - cx;
+        int32_t e = int32_t(uint32_t(d32(uint16_t(rec + 10))) + uint32_t(cy) - 0x1000000u);
+        int32_t z = alt - calt;
+        // The engine's limit is 0x7FFF instance units; allow four times that.
+        float lim = 4.0f * 32767.0f * size;
+        if (std::fabs(float(a)) > lim || std::fabs(float(e)) > lim) continue;
+        uint16_t code = ds16(uint16_t(list_codes_ + int16_t(ds16(uint16_t(rec + 0x14))) * 0x20));
+        SceneInstance in{};
+        in.shape = shape_at(shape_code(code, shape_seg));
+        in.pos[0] = a;
+        in.pos[1] = -e;
+        in.pos[2] = alt != 0;
+        in.cam[0] = 0;
+        in.cam[1] = 0;
+        in.cam[2] = -z;
+        in.angle[0] = uint16_t(-int16_t(ds16(uint16_t(rec + 0x0E))));
+        in.angle[1] = ds16(uint16_t(rec + 0x10));
+        in.angle[2] = ds16(uint16_t(rec + 0x12));
+        in.scale = 1;
+        in.size = size;
+        in.level = 0;
+        sc.instances.push_back(std::move(in));
+        added++;
+    }
+    scene_stats[2] += added;
+}
+
+// Shape draw entry. Terrain calls: remember state-dependent shapes
+// (destroyed objects). Dynamic objects (after the object-draw routine) in
+// the main view become scene instances.
+void WorldCapture::on_shape_draw() {
+    const Regs& r = m_.cpu.regs;
+    auto st = [&](int off) { return m_.mem.read16(r.s[SS], uint16_t(r.r[SP] + off)); };
+    uint32_t ret = Memory::linear(st(2), st(0));
+    uint16_t soff = st(4), sseg = st(6);
+    int shift = pending_shift_;
+    pending_shift_ = -1000;
+    if (!soff) return;
+    uint32_t lin = Memory::linear(sseg, soff);
+    int16_t x = int16_t(st(14)), y = int16_t(st(16)), z = int16_t(st(18));
+    if (ret >= terrain_lo_ && ret < terrain_lo_ + 0x400) {
+        int L = int16_t(ds16(level_));
+        if (L < 1 || L > 4) return;
+        int32_t cx = level_coord(L, cam_world_[0]), cy = level_coord(L, cam_world_[1]);
+        int tx = (cx - int16_t(ds16(cam_off_[0])) - 0x800) >> 12, ty = (cy - int16_t(ds16(cam_off_[1])) - 0x800) >> 12;
+        int type = tile_type(L, tx, ty);
+        uint16_t list = ds16(uint16_t(lists_ + L * 0x40 + type * 2));
+        int n = ds16(uint16_t(counts_ + L * 0x40 + type * 2));
+        for (int i = 0; i < n && i < 256; i++) {
+            uint16_t rec = uint16_t(list + 7 * i);
+            if ((ds8(uint16_t(rec + 6)) & 0x80) && int16_t(ds16(rec)) == x && int16_t(ds16(uint16_t(rec + 2))) == y &&
+                int16_t(ds16(uint16_t(rec + 4))) == z) {
+                auto& o = overrides_[{L, tx, ty, i}];
+                if (o != lin) scene_stats[3]++;
+                o = lin;
+                break;
+            }
+        }
+        return;
+    }
+    bool skip = pending_skip_;
+    pending_skip_ = false;
+    if (shift == -1000 || !scene_ || skip) return;
+    HiresProj pj = proj_state();
+    if (!(pj.ox == 0 && pj.oy == 0 && pj.vp_w >= 320)) return;
+    SceneInstance in{};
+    in.shape = shape_at(lin);
+    in.pos[0] = x;
+    in.pos[1] = y;
+    in.pos[2] = z;
+    for (int k = 0; k < 3; k++) in.cam[k] = int16_t(ds16(cam_off_[k]));
+    in.angle[0] = st(8);
+    in.angle[1] = st(10);
+    in.angle[2] = st(12);
+    // Positions are shifted by (arg - 3), or (arg - 2) when zoomed; we do
+    // not zoom, so keep the unzoomed enlargement as a shape size.
+    bool zoom = ds8(oc_zoom_) != 0;
+    int k = shift - (zoom ? 2 : 3);
+    in.scale = std::ldexp(1.0f, -k);
+    in.size = zoom ? 2.0f : 1.0f;
+    in.level = 0;
+    dynamic_.push_back(std::move(in));
+}
+
 void WorldCapture::flip() {
     auto f = std::make_shared<HiresFrame>();
+    if (scene_) {
+        scene_->instances.insert(scene_->instances.end(), dynamic_.begin(), dynamic_.end());
+        scene_stats[0]++;
+        scene_stats[2] += dynamic_.size();
+        f->scene = std::move(scene_);
+    }
+    scene_.reset();
+    dynamic_.clear();
     uint16_t back = gfx_.page_seg(1);
     f->page.assign(m_.mem.data() + Memory::linear(back, 0), m_.mem.data() + Memory::linear(back, 0) + 64000);
     f->mask = mask_;

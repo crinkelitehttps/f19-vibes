@@ -4,6 +4,7 @@
 // Usage: f19trace GAMEDIR [-p PROGRAM] [-a ARGS] [-n MILLIONS] [-t] [-s OUT.ppm] [-k KEYS]
 //   -k KEYS: keys to type, one per emulated second ('\n' = Enter).
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 #include <map>
 #include <memory>
@@ -18,6 +19,7 @@
 #include "core/machine.h"
 #include "drivers/mgraphic.h"
 #include "hires/gl_render.h"
+#include "hires/scene.h"
 #include "hires/world_capture.h"
 #include <SDL3/SDL.h>
 
@@ -200,10 +202,37 @@ int main(int argc, char** argv) {
             save(hires_shot, true);
             save(hires_shot + ".world.ppm", false);
             gr.draw_overlay = true;
-            for (auto [suffix, head] : {std::pair{".cockpit3d.ppm", HeadPose{}},
-                                        std::pair{".cockpit3d-look.ppm", HeadPose{0.35f, -0.15f}},
-                                        std::pair{".cockpit3d-lean.ppm", HeadPose{0.2f, -0.3f, 0.25f, 8, 0, -15}}}) {
+            if (frame->scene)
+                std::fprintf(stderr, "scene: %zu instances in the last frame; %llu frames, avg terrain %.0f dynamic %.1f, %llu destroyed-state changes\n",
+                             frame->scene->instances.size(), (unsigned long long)capture->scene_stats[0],
+                             capture->scene_stats[0] ? double(capture->scene_stats[1]) / double(capture->scene_stats[0]) : 0.0,
+                             capture->scene_stats[0] ? double(capture->scene_stats[2]) / double(capture->scene_stats[0]) : 0.0,
+                             (unsigned long long)capture->scene_stats[3]);
+            else
+                std::fprintf(stderr, "scene: none in the last frame\n");
+            if (frame->scene) {
+                std::vector<HiresPrim> sp;
+                SceneBuildParams bp;
+                bp.lod_scale = 3.0f;
+                auto t0 = std::chrono::steady_clock::now();
+                for (int i = 0; i < 20; i++) build_scene_prims(*frame->scene, bp, sp);
+                double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / 20;
+                size_t kinds[4] = {};
+                for (auto& p : sp) kinds[p.kind]++;
+                size_t lv[5] = {};
+                for (auto& in : frame->scene->instances) lv[std::clamp<int>(in.level, 0, 4)]++;
+                std::fprintf(stderr, "scene: instances per level: dynamic %zu, L1 %zu, L2 %zu, L3 %zu, L4 %zu\n", lv[0], lv[1], lv[2], lv[3], lv[4]);
+                std::fprintf(stderr, "scene: build %.2f ms -> %zu polys, %zu lines, %zu dots\n", ms, kinds[0], kinds[1], kinds[2]);
+            }
+            struct Shot { const char* suffix; HeadPose head; bool native; };
+            for (auto [suffix, head, native] : {Shot{".cockpit3d.ppm", HeadPose{}, true},
+                                                Shot{".cockpit3d-captured.ppm", HeadPose{}, false},
+                                                Shot{".cockpit3d-look.ppm", HeadPose{0.35f, -0.15f}, true},
+                                                Shot{".cockpit3d-left.ppm", HeadPose{-1.4f, -0.1f}, true},
+                                                Shot{".cockpit3d-behind.ppm", HeadPose{2.6f, 0.1f}, true},
+                                                Shot{".cockpit3d-lean.ppm", HeadPose{0.2f, -0.3f, 0.25f, 8, 0, -15}, true}}) {
                 GLuint tex;
+                gr.native_world = native;
                 if (gr.render_cockpit3d(*frame, 1280, 720, head, &tex)) {
                     auto rgb = gr.read_rgb(tex, 1280, 720);
                     FILE* fo = std::fopen((hires_shot + suffix).c_str(), "wb");
