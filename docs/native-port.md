@@ -219,6 +219,17 @@ top tilted 25° away). The HUD/canopy (top of the page) is not drawn.
 Limitation for freelook: the engine only draws objects inside its own
 forward view, so looking far aside shows sky/ground but no objects.
 
+Head tracking (`native/src/host/headtrack.cpp`): OpenTrack's "UDP over
+network" output (six little-endian doubles per datagram: x, y, z in cm,
+yaw, pitch, roll in degrees), received on 127.0.0.1:4242 by default
+(`--headtrack-port N`, 0 disables; `--headtrack-bind ADDR`). Rotation
+drives the camera (yaw right +, pitch up +, roll right ear down +; mouse
+look adds to it); position (x right, y up, z back) moves only the eye
+relative to the panel quad (1 unit = 60 cm, eye kept behind the panel),
+so leaning in brings the instruments closer. The pose drops back to
+neutral if no data arrives for 1 s. `f19trace -H` also writes a
+`.cockpit3d-lean.ppm` with a sample 6DOF pose.
+
 View keys (from the key handler): F1 cockpit; Shift+F1..F6 external views
 (view variable `[9422]` = 87h, 84h, 85h, 89h, 88h, 8Bh). EGAME's INT 9 handler
 dedupes the BIOS key buffer using the AT BIOS bounds at 0040:0080/0082,
@@ -247,7 +258,8 @@ Working:
   = display refresh).
 - High-res 3D world (MSAA, object depth) via engine capture; cockpit view
   as a 3D scene (panel as a tilted textured quad, HUD hidden); widescreen
-  external views; F11 toggles 3D/flat; right-drag mouse look; F12
+  external views; F11 toggles 3D/flat; right-drag mouse look; OpenTrack
+  UDP head tracking (6DOF); F12
   screenshots (+ engine frame + primitive dump); F19_PERF=1 timing.
 - Headless checks: `build/native/f19trace out/run/demo_native -n 330 -k n1 -H x.ppm`
   (demo flies itself; writes hi-res, world-only, page, mask, 3D renders).
@@ -264,7 +276,6 @@ Open / next:
 - Possible residual hitches (user suspects their VNC session); measure with
   F19_PERF=1.
 - Sound: PC speaker not emulated. Display modes other than VGA unsupported.
-- Long-term: 3D cockpit with instrument bitmaps on modelled screens; head
-  tracking via the head yaw/pitch already plumbed through the renderer;
+- Long-term: 3D cockpit with instrument bitmaps on modelled screens;
   progressive porting of game logic (flight model first, STREAM.DTA as a
   regression input).

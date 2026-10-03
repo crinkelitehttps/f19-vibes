@@ -200,9 +200,11 @@ int main(int argc, char** argv) {
             save(hires_shot, true);
             save(hires_shot + ".world.ppm", false);
             gr.draw_overlay = true;
-            for (auto [suffix, yaw, pitch] : {std::tuple{".cockpit3d.ppm", 0.0f, 0.0f}, std::tuple{".cockpit3d-look.ppm", 0.35f, -0.15f}}) {
+            for (auto [suffix, head] : {std::pair{".cockpit3d.ppm", HeadPose{}},
+                                        std::pair{".cockpit3d-look.ppm", HeadPose{0.35f, -0.15f}},
+                                        std::pair{".cockpit3d-lean.ppm", HeadPose{0.2f, -0.3f, 0.25f, 8, 0, -15}}}) {
                 GLuint tex;
-                if (gr.render_cockpit3d(*frame, 1280, 720, yaw, pitch, &tex)) {
+                if (gr.render_cockpit3d(*frame, 1280, 720, head, &tex)) {
                     auto rgb = gr.read_rgb(tex, 1280, 720);
                     FILE* fo = std::fopen((hires_shot + suffix).c_str(), "wb");
                     std::fprintf(fo, "P6\n1280 720\n255\n");

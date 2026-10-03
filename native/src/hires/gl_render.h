@@ -16,6 +16,15 @@
 
 namespace f19 {
 
+// Head pose in the aircraft frame: rotation (radians; yaw right +, pitch up +,
+// roll right ear down +) and position (cm from the neutral eye point; x right,
+// y up, z back).
+struct HeadPose {
+    float yaw = 0, pitch = 0, roll = 0;
+    float x = 0, y = 0, z = 0;
+    bool operator==(const HeadPose&) const = default;
+};
+
 class GlRenderer {
 public:
     ~GlRenderer();
@@ -31,16 +40,18 @@ public:
     // panel becomes a surface in the cockpit and the 2D HUD is hidden.
     // External views: the game's 2D elements are composited centred 4:3.
     // The world is rendered through
-    // our own perspective camera rotated by the head (yaw right / pitch up,
-    // radians), sky and ground per pixel, and the instrument panel (the
-    // page below the 3D viewport) as a textured quad in the cockpit.
+    // our own perspective camera rotated by the head, sky and ground per
+    // pixel, and the instrument panel (the page below the 3D viewport) as a
+    // textured quad in the cockpit. Head position only moves the eye
+    // relative to the panel (the world is far away).
     // Returns a w x h texture.
-    bool render_cockpit3d(const HiresFrame& f, int w, int h, float head_yaw, float head_pitch, GLuint* out);
+    bool render_cockpit3d(const HiresFrame& f, int w, int h, const HeadPose& head, GLuint* out);
     // Panel placement in the aircraft frame (eye at origin, x right, y up,
     // z forward; units arbitrary, only proportions matter).
     float panel_width = 1.0f, panel_center[3] = {0.0f, -0.22f, 0.90f};
     float panel_tilt_deg = 25.0f;   // top edge leans away from the viewer
     float hfov_4x3_deg = 64.0f;     // the original's horizontal field of view
+    float panel_units_per_cm = 1.0f / 60.0f;  // head position scale (panel width ~60 cm)
 
     // A w x h RGBA8 image (0xAARRGGBB words) as a texture (`nearest` filtering).
     GLuint upload(const uint32_t* argb, int w, int h);

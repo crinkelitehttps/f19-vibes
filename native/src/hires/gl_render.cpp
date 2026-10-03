@@ -469,11 +469,20 @@ struct M3 {
                 m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2]};
     }
 };
-// Head orientation in the aircraft frame: yaw (right +) about y, then pitch (up +) about x.
-M3 head_matrix(float yaw, float pitch) {
+M3 mul(const M3& a, const M3& b) {
+    M3 r;
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++) r.m[i][j] = a.m[i][0] * b.m[0][j] + a.m[i][1] * b.m[1][j] + a.m[i][2] * b.m[2][j];
+    return r;
+}
+// Head orientation in the aircraft frame: yaw (right +) about y, then pitch
+// (up +) about x, then roll (right ear down +) about z.
+M3 head_matrix(float yaw, float pitch, float roll) {
     float cy = std::cos(yaw), sy = std::sin(yaw), cp = std::cos(pitch), sp = std::sin(pitch);
-    // H = Ry(yaw) * Rx(-pitch): columns are the view axes in aircraft space.
-    return M3{{{cy, sy * sp, sy * cp}, {0, cp, -sp}, {-sy, cy * sp, cy * cp}}};
+    float cr = std::cos(roll), sr = std::sin(roll);
+    // H = Ry(yaw) * Rx(-pitch) * Rz(-roll): columns are the view axes in aircraft space.
+    M3 yp{{{cy, -sy * sp, sy * cp}, {0, cp, sp}, {-sy, -cy * sp, cy * cp}}};
+    return mul(yp, M3{{{cr, sr, 0}, {-sr, cr, 0}, {0, 0, 1}}});
 }
 M3 transpose(const M3& a) {
     M3 t;
@@ -483,7 +492,7 @@ M3 transpose(const M3& a) {
 }
 }  // namespace
 
-bool GlRenderer::render_cockpit3d(const HiresFrame& f, int w, int h, float head_yaw, float head_pitch, GLuint* out) {
+bool GlRenderer::render_cockpit3d(const HiresFrame& f, int w, int h, const HeadPose& head, GLuint* out) {
     // The main view is the full-width viewport at the page origin; in the
     // cockpit view it stops above the instrument panel.
     const HiresPrim* hor = nullptr;
@@ -502,7 +511,7 @@ bool GlRenderer::render_cockpit3d(const HiresFrame& f, int w, int h, float head_
     const float tan_v = std::tan(hfov_4x3_deg * 0.5f * 3.14159265f / 180.0f) * 0.75f;
     const float focal = (h * 0.5f) / tan_v;
     (void)aspect;
-    M3 H = head_matrix(head_yaw, head_pitch), V = transpose(H);  // V: aircraft -> view
+    M3 H = head_matrix(head.yaw, head.pitch, head.roll), V = transpose(H);  // V: aircraft -> view
 
     // World primitives of the main view, projected by our camera.
     verts_.clear();
@@ -628,11 +637,17 @@ bool GlRenderer::render_cockpit3d(const HiresFrame& f, int w, int h, float head_
         float tri[6][5];
         int order[6] = {0, 1, 2, 0, 2, 3};
         for (int i = 0; i < 6; i++) std::copy_n(verts[order[i]], 5, tri[i]);
-        // MVP: perspective (same focal as the world) * aircraft->view rotation.
+        // MVP: perspective (same focal as the world) * aircraft->view rotation
+        // * eye offset (head position; z back +, aircraft z forward). The eye
+        // stays behind the panel.
+        float ex = head.x * panel_units_per_cm, ey = head.y * panel_units_per_cm;
+        float ez = std::min(-head.z * panel_units_per_cm, c[2] - 0.25f);
+        float tv[3];
+        for (int i = 0; i < 3; i++) tv[i] = -(V.m[i][0] * ex + V.m[i][1] * ey + V.m[i][2] * ez);
         float sx = 2 * focal / w, sy = 2 * focal / h, n = 0.01f, fa = 100.0f;
         float P[16] = {sx, 0, 0, 0, 0, sy, 0, 0, 0, 0, (fa + n) / (fa - n), 1, 0, 0, -2 * fa * n / (fa - n), 0};
         float R[16] = {V.m[0][0], V.m[1][0], V.m[2][0], 0, V.m[0][1], V.m[1][1], V.m[2][1], 0,
-                       V.m[0][2], V.m[1][2], V.m[2][2], 0, 0, 0, 0, 1};
+                       V.m[0][2], V.m[1][2], V.m[2][2], 0, tv[0], tv[1], tv[2], 1};
         float mvp[16];
         for (int col = 0; col < 4; col++)
             for (int row = 0; row < 4; row++) {

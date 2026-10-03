@@ -4,13 +4,17 @@
 // In the cockpit view the world is rendered in 3D with the instrument panel
 // as a surface in the cockpit (F11 toggles; --flat-cockpit starts with the
 // original 2D layout). Hold the right mouse button and drag to look around.
+// Head tracking: OpenTrack's "UDP over network" output, received on
+// 127.0.0.1:4242 by default (--headtrack-port 0 disables, --headtrack-bind
+// ADDR to accept it from another machine); mouse look adds to it.
 // F12 saves a screenshot (BMP) in the current directory, plus debug data
 // for the high-resolution renderer (captured primitives, the engine's own
 // 320x200 frame).
 //
 // Set F19_PERF=1 for a once-a-second timing summary.
 //
-// Usage: f19 [GAMEDIR] [--scale N] [--mips N] [--msaa N] [--vga-hz HZ] [--trace] [--original-driver] [--verify-driver] [--lowres]
+// Usage: f19 [GAMEDIR] [--scale N] [--mips N] [--msaa N] [--vga-hz HZ] [--headtrack-port N] [--headtrack-bind ADDR]
+//            [--trace] [--original-driver] [--verify-driver] [--lowres]
 //   The 3D world is rendered at the window's resolution unless --lowres
 //   (needs the native driver).
 //   GAMEDIR defaults to the current directory; it must be writable (the
@@ -35,6 +39,7 @@
 #include "drivers/mgraphic.h"
 #include "hires/gl_render.h"
 #include "hires/world_capture.h"
+#include "host/headtrack.h"
 
 using namespace f19;
 
@@ -206,6 +211,8 @@ int main(int argc, char** argv) {
     int msaa = 8;
     double vga_hz = 0;    // 0 = match the display
     bool flat_cockpit = false;
+    int headtrack_port = 4242;
+    std::string headtrack_bind = "127.0.0.1";
     bool trace = false, original_driver = false, verify_driver = false, lowres = false, no_depth = false;
     for (int i = 1; i < argc; i++) {
         if (!std::strcmp(argv[i], "--scale") && i + 1 < argc) scale = std::atoi(argv[++i]);
@@ -218,6 +225,8 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--no-depth")) no_depth = true;
         else if (!std::strcmp(argv[i], "--vga-hz") && i + 1 < argc) vga_hz = std::atof(argv[++i]);
         else if (!std::strcmp(argv[i], "--flat-cockpit")) flat_cockpit = true;
+        else if (!std::strcmp(argv[i], "--headtrack-port") && i + 1 < argc) headtrack_port = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--headtrack-bind") && i + 1 < argc) headtrack_bind = argv[++i];
         else dir = argv[i];
     }
 
@@ -278,7 +287,15 @@ int main(int argc, char** argv) {
 
     bool want_screenshot = false;
     bool cockpit3d = !flat_cockpit, looking = false;
-    float head_yaw = 0, head_pitch = 0, shown_yaw = 0, shown_pitch = 0;
+    float head_yaw = 0, head_pitch = 0;  // mouse look
+    HeadPose shown_head;
+    HeadTracker tracker;
+    if (headtrack_port > 0) {
+        if (tracker.open(headtrack_bind.c_str(), headtrack_port))
+            std::fprintf(stderr, "head tracking: listening for OpenTrack UDP on %s:%d\n", headtrack_bind.c_str(), headtrack_port);
+        else
+            std::fprintf(stderr, "warning: head tracking: cannot bind %s:%d\n", headtrack_bind.c_str(), headtrack_port);
+    }
     bool shown_3d = false;
 
     // Match the emulated VGA refresh to the display, so each game frame
@@ -352,8 +369,9 @@ int main(int argc, char** argv) {
                 continue;
             }
             if (ev.type == SDL_EVENT_KEY_UP && ev.key.scancode == SDL_SCANCODE_F11) continue;
-            // Freelook (stand-in for head tracking): hold the right mouse
-            // button and drag; releasing recentres.
+            // Freelook (adds to head tracking): hold the right mouse
+            // button and drag (dragging up looks down, like a stick);
+            // releasing recentres.
             // (Plain motion deltas, not relative mode: pointer warping in
             // relative mode misbehaves over VNC/remote sessions.)
             if (ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN && ev.button.button == SDL_BUTTON_RIGHT) looking = true;
@@ -363,7 +381,7 @@ int main(int argc, char** argv) {
             }
             if (ev.type == SDL_EVENT_MOUSE_MOTION && looking) {
                 head_yaw = std::clamp(head_yaw + std::clamp(ev.motion.xrel, -50.0f, 50.0f) * 0.004f, -2.6f, 2.6f);
-                head_pitch = std::clamp(head_pitch - std::clamp(ev.motion.yrel, -50.0f, 50.0f) * 0.004f, -1.2f, 1.3f);
+                head_pitch = std::clamp(head_pitch + std::clamp(ev.motion.yrel, -50.0f, 50.0f) * 0.004f, -1.2f, 1.3f);
             }
             if (ev.type == SDL_EVENT_KEY_DOWN || ev.type == SDL_EVENT_KEY_UP) {
                 // Raw make/break codes go through port 60h + IRQ1 so the
@@ -405,6 +423,11 @@ int main(int argc, char** argv) {
             }
         }
 
+        // Head pose: tracker plus mouse look.
+        HeadPose head = tracker.poll();
+        head.yaw = std::clamp(head.yaw + head_yaw, -2.6f, 2.6f);
+        head.pitch = std::clamp(head.pitch + head_pitch, -1.2f, 1.3f);
+
         // 4:3 letterbox in the window's pixels.
         int ow, oh;
         SDL_GetWindowSizeInPixels(win, &ow, &oh);
@@ -417,17 +440,15 @@ int main(int argc, char** argv) {
         bool full_window = false;
         if (use_hires && cockpit3d) {
             // 3D view (cockpit and external views): fills the whole window.
-            if (frame != shown_frame || !hires_tex || !shown_3d || hires_w != ow || hires_h != oh || head_yaw != shown_yaw ||
-                head_pitch != shown_pitch) {
+            if (frame != shown_frame || !hires_tex || !shown_3d || hires_w != ow || hires_h != oh || head != shown_head) {
                 GLuint t3;
-                if (renderer.render_cockpit3d(*frame, ow, oh, head_yaw, head_pitch, &t3)) {
+                if (renderer.render_cockpit3d(*frame, ow, oh, head, &t3)) {
                     hires_tex = t3;
                     shown_frame = frame;
                     shown_3d = true;
                     hires_w = ow;
                     hires_h = oh;
-                    shown_yaw = head_yaw;
-                    shown_pitch = head_pitch;
+                    shown_head = head;
                 } else {
                     shown_3d = false;
                 }
