@@ -249,7 +249,7 @@ the flight model, each differential-tested against the interpreted
 original on recorded inputs. The interpreter remains as a fallback until
 nothing calls into it.
 
-## Status and next steps (2026-10-03)
+## Status and next steps (2026-10-03, native Arch laptop)
 
 Working:
 - `build/native/f19 out/run/native` runs the full game natively: original
@@ -259,10 +259,12 @@ Working:
 - High-res 3D world (MSAA, object depth) via engine capture; cockpit view
   as a 3D scene (panel as a tilted textured quad, HUD hidden); widescreen
   external views; F11 toggles 3D/flat; right-drag mouse look; OpenTrack
-  UDP head tracking (6DOF); F12
+  UDP head tracking (6DOF; confirmed live with OpenTrack and the laptop
+  webcam); F12
   screenshots (+ engine frame + primitive dump); F19_PERF=1 timing.
-- Headless checks: `build/native/f19trace out/run/demo_native -n 330 -k n1 -H x.ppm`
-  (demo flies itself; writes hi-res, world-only, page, mask, 3D renders).
+- Headless checks: `build/native/f19trace out/run/demo_native -n 380 -k n1 -H x.ppm`
+  (demo flies itself; writes hi-res, world-only, page, mask, 3D renders;
+  -n 380 lands on a cockpit frame, -n 330 now gives an external view).
 
 Open / next:
 - Freelook beyond ~±51°: the engine culls outside its frustum; needs the
