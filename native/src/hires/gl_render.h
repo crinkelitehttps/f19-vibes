@@ -27,11 +27,14 @@ public:
 
     // Composited frame at w x h; returns a texture valid until the next call.
     GLuint render_frame(const HiresFrame& f, int w, int h);
-    // 3D cockpit view (cockpit view frames only): the world rendered through
+    // 3D view at the window's aspect ratio. Cockpit view: the instrument
+    // panel becomes a surface in the cockpit and the 2D HUD is hidden.
+    // External views: the game's 2D elements are composited centred 4:3.
+    // The world is rendered through
     // our own perspective camera rotated by the head (yaw right / pitch up,
     // radians), sky and ground per pixel, and the instrument panel (the
     // page below the 3D viewport) as a textured quad in the cockpit.
-    // Returns a w x h texture; false if `f` is not a cockpit-view frame.
+    // Returns a w x h texture.
     bool render_cockpit3d(const HiresFrame& f, int w, int h, float head_yaw, float head_pitch, GLuint* out);
     // Panel placement in the aircraft frame (eye at origin, x right, y up,
     // z forward; units arbitrary, only proportions matter).

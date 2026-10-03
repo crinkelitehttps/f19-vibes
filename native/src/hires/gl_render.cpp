@@ -494,7 +494,7 @@ bool GlRenderer::render_cockpit3d(const HiresFrame& f, int w, int h, float head_
             if (p.kind == HiresPrim::Horizon) hor = &p;
             break;
         }
-    if (vp_h >= 200) return false;
+    const bool external = vp_h >= 200;  // external views: no panel; 2D layer centred 4:3
 
     ensure_framebuffers(w, h);
     const float aspect = float(w) / float(h);
@@ -603,7 +603,7 @@ bool GlRenderer::render_cockpit3d(const HiresFrame& f, int w, int h, float head_
     draw_groups();
 
     // Instrument panel: page rows below the 3D viewport on a tilted quad.
-    {
+    if (!external) {
         static std::vector<uint32_t> px(64000);
         for (int i = 0; i < 64000; i++) {
             const uint8_t* d = f.dac[f.page[i]];
@@ -655,6 +655,26 @@ bool GlRenderer::render_cockpit3d(const HiresFrame& f, int w, int h, float head_
     BindFramebuffer(GL_READ_FRAMEBUFFER, ms_fbo_);
     BindFramebuffer(GL_DRAW_FRAMEBUFFER, out_fbo_);
     BlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    if (external && draw_overlay) {
+        // The game's 2D elements (text etc.) at original proportions, centred
+        // 4:3 at full height; world pixels transparent.
+        BindFramebuffer(GL_FRAMEBUFFER, out_fbo_);
+        Viewport(0, 0, w, h);
+        static std::vector<uint32_t> px(64000);
+        for (int i = 0; i < 64000; i++) {
+            const uint8_t* d = f.dac[f.page[i]];
+            uint32_t a = f.mask[i] ? 0u : 255u;
+            px[i] = a << 24 | uint32_t(d[0] * 255 / 63) << 16 | uint32_t(d[1] * 255 / 63) << 8 | uint32_t(d[2] * 255 / 63);
+        }
+        BindTexture(GL_TEXTURE_2D, overlay_tex_);
+        PixelStorei(GL_UNPACK_ALIGNMENT, 4);
+        TexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 320, 200, GL_BGRA, GL_UNSIGNED_BYTE, px.data());
+        Enable(GL_BLEND);
+        BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        float half = std::min(1.0f, (h * 4.0f / 3.0f) / w);  // NDC half-width of the 4:3 area
+        draw_textured(overlay_tex_, -half, -1, half, 1);
+        Disable(GL_BLEND);
+    }
     BindFramebuffer(GL_FRAMEBUFFER, 0);
     *out = out_tex_;
     return true;

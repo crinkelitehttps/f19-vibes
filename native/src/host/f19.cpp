@@ -354,18 +354,16 @@ int main(int argc, char** argv) {
             if (ev.type == SDL_EVENT_KEY_UP && ev.key.scancode == SDL_SCANCODE_F11) continue;
             // Freelook (stand-in for head tracking): hold the right mouse
             // button and drag; releasing recentres.
-            if (ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN && ev.button.button == SDL_BUTTON_RIGHT) {
-                looking = true;
-                SDL_SetWindowRelativeMouseMode(win, true);
-            }
+            // (Plain motion deltas, not relative mode: pointer warping in
+            // relative mode misbehaves over VNC/remote sessions.)
+            if (ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN && ev.button.button == SDL_BUTTON_RIGHT) looking = true;
             if (ev.type == SDL_EVENT_MOUSE_BUTTON_UP && ev.button.button == SDL_BUTTON_RIGHT) {
                 looking = false;
-                SDL_SetWindowRelativeMouseMode(win, false);
                 head_yaw = head_pitch = 0;
             }
             if (ev.type == SDL_EVENT_MOUSE_MOTION && looking) {
-                head_yaw = std::clamp(head_yaw + ev.motion.xrel * 0.004f, -2.6f, 2.6f);
-                head_pitch = std::clamp(head_pitch - ev.motion.yrel * 0.004f, -1.2f, 1.3f);
+                head_yaw = std::clamp(head_yaw + std::clamp(ev.motion.xrel, -50.0f, 50.0f) * 0.004f, -2.6f, 2.6f);
+                head_pitch = std::clamp(head_pitch - std::clamp(ev.motion.yrel, -50.0f, 50.0f) * 0.004f, -1.2f, 1.3f);
             }
             if (ev.type == SDL_EVENT_KEY_DOWN || ev.type == SDL_EVENT_KEY_UP) {
                 // Raw make/break codes go through port 60h + IRQ1 so the
@@ -418,7 +416,7 @@ int main(int argc, char** argv) {
         GLuint tex;
         bool full_window = false;
         if (use_hires && cockpit3d) {
-            // 3D cockpit (cockpit view only): fills the whole window.
+            // 3D view (cockpit and external views): fills the whole window.
             if (frame != shown_frame || !hires_tex || !shown_3d || hires_w != ow || hires_h != oh || head_yaw != shown_yaw ||
                 head_pitch != shown_pitch) {
                 GLuint t3;
