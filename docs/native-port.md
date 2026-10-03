@@ -214,8 +214,12 @@ wider windows see more) rotated by a head orientation; sky and ground are
 shaded per pixel from the camera-space up vector, reconstructed from the
 horizon inputs as (-s·[9B2], c·[9B2], -[9B0]); the page rows below the
 viewport (instrument panel, live each frame incl. map and TrackCam) are a
-texture on a quad in the aircraft frame (centre (0, -0.22, 0.9), width 1,
-top tilted 25° away). The HUD/canopy (top of the page) is not drawn.
+texture on a quad in the aircraft frame (centre (0, -0.29, 0.9), width 1,
+top tilted 25° away). The HUD (non-world pixels of the rows above the
+viewport, page columns 45-275 = the HUD frame) is an upright quad facing the
+seat, 0.6 wide, ahead of and above the panel, with its crosshair (page pixel
+159.5, 58.5) straight ahead at distance 1.25: the screen centre at neutral
+head pose. It is fixed to the cockpit, not conformal to the world.
 Limitation for freelook: the engine only draws objects inside its own
 forward view, so looking far aside shows sky/ground but no objects.
 
@@ -257,7 +261,7 @@ Working:
   OpenGL renderer, emulation on its own thread (25 MIPS default, VGA refresh
   = display refresh).
 - High-res 3D world (MSAA, object depth) via engine capture; cockpit view
-  as a 3D scene (panel as a tilted textured quad, HUD hidden); widescreen
+  as a 3D scene (panel as a tilted textured quad, HUD upright above it); widescreen
   external views; F11 toggles 3D/flat; right-drag mouse look; OpenTrack
   UDP head tracking (6DOF; confirmed live with OpenTrack and the laptop
   webcam); F12
@@ -272,8 +276,8 @@ Open / next:
   with rotated camera, or widening its cull tables at 0x9BBC/0x9BC0).
 - Ground colour outside engine geometry is the engine ground colour (green)
   even over sea.
-- HUD/canopy in the 3D cockpit: planned as wireframe (capture the HUD's
-  driver line/text calls instead of pixels).
+- HUD in the 3D cockpit is the upscaled 320x200 pixels; sharper later by
+  capturing the HUD's driver line/text calls instead of pixels.
 - Carrier wake not captured (another fill path); distant thin land slivers.
 - Possible residual hitches (user suspects their VNC session); measure with
   F19_PERF=1.

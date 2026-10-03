@@ -611,35 +611,28 @@ bool GlRenderer::render_cockpit3d(const HiresFrame& f, int w, int h, const HeadP
     BufferData(GL_ARRAY_BUFFER, GLsizeiptr(verts_.size() * sizeof(Vert)), verts_.data(), GL_STREAM_DRAW);
     draw_groups();
 
-    // Instrument panel: page rows below the 3D viewport on a tilted quad.
+    // Cockpit surfaces, fixed in the aircraft frame: the HUD (the page's 2D
+    // layer above the 3D viewport) on an upright quad ahead of the panel, and
+    // the instrument panel (page rows below the viewport) on a tilted quad.
     if (!external) {
+        // One texture for both: HUD rows keep only non-world pixels
+        // (premultiplied alpha), panel rows are opaque.
         static std::vector<uint32_t> px(64000);
+        const int hud_rows = int(vp_h);
         for (int i = 0; i < 64000; i++) {
             const uint8_t* d = f.dac[f.page[i]];
-            px[i] = 0xFF000000u | uint32_t(d[0] * 255 / 63) << 16 | uint32_t(d[1] * 255 / 63) << 8 | uint32_t(d[2] * 255 / 63);
+            px[i] = (i < hud_rows * 320 && f.mask[i])
+                        ? 0u
+                        : 0xFF000000u | uint32_t(d[0] * 255 / 63) << 16 | uint32_t(d[1] * 255 / 63) << 8 | uint32_t(d[2] * 255 / 63);
         }
         BindTexture(GL_TEXTURE_2D, panel_tex_);
         PixelStorei(GL_UNPACK_ALIGNMENT, 4);
         TexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 320, 200, GL_BGRA, GL_UNSIGNED_BYTE, px.data());
-        float rows = 200.0f - vp_h;
-        float pw = panel_width, ph = pw * rows * 1.2f / 320.0f;  // 4:3 pixel aspect
-        float t = panel_tilt_deg * 3.14159265f / 180.0f;
-        float ux = 0, uy = std::cos(t), uz = std::sin(t);  // panel "up" leans away
-        const float* c = panel_center;
-        float v0 = vp_h / 200.0f;
-        float verts[4][5] = {
-            {c[0] - pw / 2, c[1] + uy * ph / 2, c[2] + uz * ph / 2, 0, v0},
-            {c[0] + pw / 2, c[1] + uy * ph / 2, c[2] + uz * ph / 2, 1, v0},
-            {c[0] + pw / 2, c[1] - uy * ph / 2, c[2] - uz * ph / 2, 1, 1},
-            {c[0] - pw / 2, c[1] - uy * ph / 2, c[2] - uz * ph / 2, 0, 1},
-        };
-        (void)ux;
-        float tri[6][5];
-        int order[6] = {0, 1, 2, 0, 2, 3};
-        for (int i = 0; i < 6; i++) std::copy_n(verts[order[i]], 5, tri[i]);
+
         // MVP: perspective (same focal as the world) * aircraft->view rotation
         // * eye offset (head position; z back +, aircraft z forward). The eye
         // stays behind the panel.
+        const float* c = panel_center;
         float ex = head.x * panel_units_per_cm, ey = head.y * panel_units_per_cm;
         float ez = std::min(-head.z * panel_units_per_cm, c[2] - 0.25f);
         float tv[3];
@@ -662,9 +655,45 @@ bool GlRenderer::render_cockpit3d(const HiresFrame& f, int w, int h, const HeadP
         BindTexture(GL_TEXTURE_2D, panel_tex_);
         BindVertexArray(panel_vao_);
         BindBuffer(GL_ARRAY_BUFFER, panel_vbo_);
-        BufferData(GL_ARRAY_BUFFER, sizeof tri, tri, GL_STREAM_DRAW);
         Disable(GL_DEPTH_TEST);
-        DrawArrays(GL_TRIANGLES, 0, 6);
+        auto draw_quad = [&](const float (&q)[4][5]) {  // corners TL, TR, BR, BL: x, y, z, u, v
+            float tri[6][5];
+            int order[6] = {0, 1, 2, 0, 2, 3};
+            for (int i = 0; i < 6; i++) std::copy_n(q[order[i]], 5, tri[i]);
+            BufferData(GL_ARRAY_BUFFER, sizeof tri, tri, GL_STREAM_DRAW);
+            DrawArrays(GL_TRIANGLES, 0, 6);
+        };
+
+        // HUD first (it is further away): face-on, the crosshair (page
+        // hud_cross) on the aircraft's forward axis at hud_distance.
+        if (draw_overlay) {
+            float x0 = hud_cols[0], x1 = hud_cols[1] + 1.0f, y1 = float(hud_rows);
+            float s = hud_width / (x1 - x0), sv = s * 1.2f;  // 4:3 pixel aspect
+            float hx0 = (x0 - hud_cross[0]) * s, hx1 = (x1 - hud_cross[0]) * s;
+            float hy0 = (hud_cross[1] - 0) * sv, hy1 = (hud_cross[1] - y1) * sv;
+            float z = hud_distance;
+            float q[4][5] = {{hx0, hy0, z, x0 / 320, 0},
+                             {hx1, hy0, z, x1 / 320, 0},
+                             {hx1, hy1, z, x1 / 320, y1 / 200},
+                             {hx0, hy1, z, x0 / 320, y1 / 200}};
+            Enable(GL_BLEND);
+            BlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+            draw_quad(q);
+            Disable(GL_BLEND);
+        }
+
+        float rows = 200.0f - vp_h;
+        float pw = panel_width, ph = pw * rows * 1.2f / 320.0f;  // 4:3 pixel aspect
+        float t = panel_tilt_deg * 3.14159265f / 180.0f;
+        float uy = std::cos(t), uz = std::sin(t);  // panel "up" leans away
+        float v0 = vp_h / 200.0f;
+        float q[4][5] = {
+            {c[0] - pw / 2, c[1] + uy * ph / 2, c[2] + uz * ph / 2, 0, v0},
+            {c[0] + pw / 2, c[1] + uy * ph / 2, c[2] + uz * ph / 2, 1, v0},
+            {c[0] + pw / 2, c[1] - uy * ph / 2, c[2] - uz * ph / 2, 1, 1},
+            {c[0] - pw / 2, c[1] - uy * ph / 2, c[2] - uz * ph / 2, 0, 1},
+        };
+        draw_quad(q);
     }
 
     BindFramebuffer(GL_READ_FRAMEBUFFER, ms_fbo_);

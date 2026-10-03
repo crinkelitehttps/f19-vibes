@@ -37,7 +37,7 @@ public:
     // Composited frame at w x h; returns a texture valid until the next call.
     GLuint render_frame(const HiresFrame& f, int w, int h);
     // 3D view at the window's aspect ratio. Cockpit view: the instrument
-    // panel becomes a surface in the cockpit and the 2D HUD is hidden.
+    // panel and the HUD become surfaces in the cockpit.
     // External views: the game's 2D elements are composited centred 4:3.
     // The world is rendered through
     // our own perspective camera rotated by the head, sky and ground per
@@ -48,8 +48,13 @@ public:
     bool render_cockpit3d(const HiresFrame& f, int w, int h, const HeadPose& head, GLuint* out);
     // Panel placement in the aircraft frame (eye at origin, x right, y up,
     // z forward; units arbitrary, only proportions matter).
-    float panel_width = 1.0f, panel_center[3] = {0.0f, -0.22f, 0.90f};
+    float panel_width = 1.0f, panel_center[3] = {0.0f, -0.29f, 0.90f};
     float panel_tilt_deg = 25.0f;   // top edge leans away from the viewer
+    // HUD: page columns hud_cols (the HUD frame) of the rows above the 3D
+    // viewport on an upright quad facing the seat, hud_width wide, with the
+    // crosshair (page pixel hud_cross) straight ahead at hud_distance.
+    float hud_cols[2] = {45, 275}, hud_cross[2] = {159.5f, 58.5f};
+    float hud_width = 0.6f, hud_distance = 1.25f;
     float hfov_4x3_deg = 64.0f;     // the original's horizontal field of view
     float panel_units_per_cm = 1.0f / 60.0f;  // head position scale (panel width ~60 cm)
 

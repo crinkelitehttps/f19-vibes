@@ -15,3 +15,4 @@ __pycache__/
 # F12 screenshots and debug dumps (frames of the game: keep local)
 /f19-*.bmp
 /f19-*-prims.txt
+/untracked/
