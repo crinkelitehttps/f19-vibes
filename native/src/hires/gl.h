@@ -47,6 +47,10 @@ namespace f19::gl {
     X(PFNGLUNIFORM1IPROC, Uniform1i)                                             \
     X(PFNGLUNIFORM2FPROC, Uniform2f)                                             \
     X(PFNGLUNIFORM4FPROC, Uniform4f)                                             \
+    X(PFNGLUNIFORM1FPROC, Uniform1f)                                             \
+    X(PFNGLUNIFORM3FPROC, Uniform3f)                                             \
+    X(PFNGLUNIFORMMATRIX3FVPROC, UniformMatrix3fv)                               \
+    X(PFNGLUNIFORMMATRIX4FVPROC, UniformMatrix4fv)                               \
     X(PFNGLGENVERTEXARRAYSPROC, GenVertexArrays)                                 \
     X(PFNGLBINDVERTEXARRAYPROC, BindVertexArray)                                 \
     X(PFNGLGENBUFFERSPROC, GenBuffers)                                           \

@@ -41,6 +41,41 @@ uniform sampler2D u_tex;
 out vec4 o_col;
 void main() { o_col = texture(u_tex, v_uv); })";
 
+const char* kSkyVS = R"(#version 330 core
+void main() {
+    vec2 p = vec2((gl_VertexID & 1) * 4.0 - 1.0, (gl_VertexID >> 1) * 4.0 - 1.0);
+    gl_Position = vec4(p, 0.0, 1.0);
+})";
+// Per-pixel sky/ground: ray in view space -> aircraft space (u_head) ->
+// sign against world up.
+const char* kSkyFS = R"(#version 330 core
+uniform vec2 u_size;
+uniform float u_focal;
+uniform mat3 u_head;
+uniform vec3 u_up;
+uniform vec3 u_sky;
+uniform vec3 u_ground;
+out vec4 o_col;
+void main() {
+    vec3 d = vec3((gl_FragCoord.x - u_size.x * 0.5) / u_focal, (gl_FragCoord.y - u_size.y * 0.5) / u_focal, 1.0);
+    vec3 a = u_head * d;
+    o_col = vec4(dot(a, u_up) > 0.0 ? u_sky : u_ground, 1.0);
+})";
+const char* kPanelVS = R"(#version 330 core
+layout(location = 0) in vec3 a_pos;
+layout(location = 1) in vec2 a_uv;
+uniform mat4 u_mvp;
+out vec2 v_uv;
+void main() {
+    gl_Position = u_mvp * vec4(a_pos, 1.0);
+    v_uv = a_uv;
+})";
+const char* kPanelFS = R"(#version 330 core
+in vec2 v_uv;
+uniform sampler2D u_tex;
+out vec4 o_col;
+void main() { o_col = texture(u_tex, v_uv); })";
+
 GLuint compile(GLenum type, const char* src) {
     GLuint s = CreateShader(type);
     ShaderSource(s, 1, &src, nullptr);
@@ -149,6 +184,30 @@ bool GlRenderer::init() {
     make_tex(overlay_tex_);
     TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 320, 200, 0, GL_BGRA, GL_UNSIGNED_BYTE, nullptr);
     make_tex(upload_tex_);
+
+    // 3D cockpit.
+    sky_prog_ = link(kSkyVS, kSkyFS);
+    const char* sky_names[6] = {"u_size", "u_focal", "u_head", "u_up", "u_sky", "u_ground"};
+    for (int i = 0; i < 6; i++) sky_loc_[i] = GetUniformLocation(sky_prog_, sky_names[i]);
+    panel_prog_ = link(kPanelVS, kPanelFS);
+    panel_mvp_loc_ = GetUniformLocation(panel_prog_, "u_mvp");
+    panel_tex_loc_ = GetUniformLocation(panel_prog_, "u_tex");
+    GenVertexArrays(1, &panel_vao_);
+    GenBuffers(1, &panel_vbo_);
+    BindVertexArray(panel_vao_);
+    BindBuffer(GL_ARRAY_BUFFER, panel_vbo_);
+    VertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), reinterpret_cast<void*>(0));
+    EnableVertexAttribArray(0);
+    VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), reinterpret_cast<void*>(3 * sizeof(float)));
+    EnableVertexAttribArray(1);
+    BindVertexArray(0);
+    GenTextures(1, &panel_tex_);
+    BindTexture(GL_TEXTURE_2D, panel_tex_);
+    TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 320, 200, 0, GL_BGRA, GL_UNSIGNED_BYTE, nullptr);
     return GetError() == GL_NO_ERROR;
 }
 
@@ -189,10 +248,14 @@ void GlRenderer::ensure_framebuffers(int w, int h) {
     fb_samples_ = samples;
 }
 
+namespace {
+bool object_is_flat(const std::vector<const HiresPrim*>& prims);
+}
 // An object is flat if all its vertices lie on one plane (ground tiles,
 // decals such as runway markings and roads): those keep the engine's
 // painter's order instead of depth testing among themselves.
-static bool object_is_flat(const std::vector<const HiresPrim*>& prims) {
+namespace {
+bool object_is_flat(const std::vector<const HiresPrim*>& prims) {
     std::vector<std::array<double, 3>> pts;
     for (auto* p : prims)
         if (p->kind == HiresPrim::Poly || p->kind == HiresPrim::Line)
@@ -217,6 +280,7 @@ static bool object_is_flat(const std::vector<const HiresPrim*>& prims) {
         }
     return true;
 }
+}  // namespace
 
 void GlRenderer::build_geometry(const HiresFrame& f, int w, int h) {
     verts_.clear();
@@ -329,6 +393,36 @@ GLuint GlRenderer::render_frame(const HiresFrame& f, int w, int h) {
     BindVertexArray(vao_);
     BindBuffer(GL_ARRAY_BUFFER, vbo_);
     BufferData(GL_ARRAY_BUFFER, GLsizeiptr(verts_.size() * sizeof(Vert)), verts_.data(), GL_STREAM_DRAW);
+    draw_groups();
+    Disable(GL_SCISSOR_TEST);
+
+    // Resolve, then the 2D layer on top.
+    BindFramebuffer(GL_READ_FRAMEBUFFER, ms_fbo_);
+    BindFramebuffer(GL_DRAW_FRAMEBUFFER, out_fbo_);
+    BlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    BindFramebuffer(GL_FRAMEBUFFER, out_fbo_);
+    if (draw_overlay) {
+        static std::vector<uint32_t> px(64000);
+        for (int i = 0; i < 64000; i++) {
+            const uint8_t* d = f.dac[f.page[i]];
+            uint32_t a = f.mask[i] ? 0u : 255u;
+            px[i] = a << 24 | uint32_t(d[0] * 255 / 63) << 16 | uint32_t(d[1] * 255 / 63) << 8 | uint32_t(d[2] * 255 / 63);
+        }
+        BindTexture(GL_TEXTURE_2D, overlay_tex_);
+        PixelStorei(GL_UNPACK_ALIGNMENT, 4);
+        TexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 320, 200, GL_BGRA, GL_UNSIGNED_BYTE, px.data());
+        Enable(GL_BLEND);
+        BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        // Uploaded images are top row first; the framebuffer has NDC +1 at
+        // the image top, so map the quad bottom-up.
+        draw_textured(overlay_tex_, -1, -1, 1, 1);
+        Disable(GL_BLEND);
+    }
+    BindFramebuffer(GL_FRAMEBUFFER, 0);
+    return out_tex_;
+}
+
+void GlRenderer::draw_groups() {
     Enable(GL_SCISSOR_TEST);
     if (!depth) {
         for (const Run& r : runs_) {
@@ -365,31 +459,205 @@ GLuint GlRenderer::render_frame(const HiresFrame& f, int w, int h) {
         Disable(GL_DEPTH_TEST);
     }
     Disable(GL_SCISSOR_TEST);
+}
 
-    // Resolve, then the 2D layer on top.
-    BindFramebuffer(GL_READ_FRAMEBUFFER, ms_fbo_);
-    BindFramebuffer(GL_DRAW_FRAMEBUFFER, out_fbo_);
-    BlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-    BindFramebuffer(GL_FRAMEBUFFER, out_fbo_);
-    if (draw_overlay) {
+namespace {
+struct M3 {
+    float m[3][3];
+    std::array<float, 3> mul(const std::array<float, 3>& v) const {
+        return {m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2], m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
+                m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2]};
+    }
+};
+// Head orientation in the aircraft frame: yaw (right +) about y, then pitch (up +) about x.
+M3 head_matrix(float yaw, float pitch) {
+    float cy = std::cos(yaw), sy = std::sin(yaw), cp = std::cos(pitch), sp = std::sin(pitch);
+    // H = Ry(yaw) * Rx(-pitch): columns are the view axes in aircraft space.
+    return M3{{{cy, sy * sp, sy * cp}, {0, cp, -sp}, {-sy, cy * sp, cy * cp}}};
+}
+M3 transpose(const M3& a) {
+    M3 t;
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++) t.m[i][j] = a.m[j][i];
+    return t;
+}
+}  // namespace
+
+bool GlRenderer::render_cockpit3d(const HiresFrame& f, int w, int h, float head_yaw, float head_pitch, GLuint* out) {
+    // The main view is the full-width viewport at the page origin; in the
+    // cockpit view it stops above the instrument panel.
+    const HiresPrim* hor = nullptr;
+    float vp_h = 200;
+    for (auto& p : f.prims)
+        if (p.proj.ox == 0 && p.proj.oy == 0 && p.proj.vp_w >= 320) {
+            vp_h = p.proj.vp_h;
+            if (p.kind == HiresPrim::Horizon) hor = &p;
+            break;
+        }
+    if (vp_h >= 200) return false;
+
+    ensure_framebuffers(w, h);
+    const float aspect = float(w) / float(h);
+    // Keep the original horizontal FOV at 4:3; wider windows see more.
+    const float tan_v = std::tan(hfov_4x3_deg * 0.5f * 3.14159265f / 180.0f) * 0.75f;
+    const float focal = (h * 0.5f) / tan_v;
+    (void)aspect;
+    M3 H = head_matrix(head_yaw, head_pitch), V = transpose(H);  // V: aircraft -> view
+
+    // World primitives of the main view, projected by our camera.
+    verts_.clear();
+    runs_.clear();
+    groups_.clear();
+    std::map<uint32_t, std::vector<const HiresPrim*>> by_object;
+    for (const HiresPrim& p : f.prims) by_object[p.object].push_back(&p);
+    std::map<uint32_t, bool> flat;
+    for (auto& [obj, list] : by_object) flat[obj] = object_is_flat(list);
+    runs_.push_back(Run{0, 0, 0, 0, w, h});
+    auto color = [&](uint8_t c) { return std::array<float, 4>{f.dac[c][0] / 63.0f, f.dac[c][1] / 63.0f, f.dac[c][2] / 63.0f, 1.0f}; };
+    auto tri_fan = [&](const std::vector<P2>& pts, std::array<float, 4> c) {
+        for (size_t i = 1; i + 1 < pts.size(); i++)
+            for (const P2& p : {pts[0], pts[i], pts[i + 1]}) verts_.push_back({p.x, p.y, p.d, c[0], c[1], c[2], c[3]});
+    };
+    auto view = [&](const std::array<float, 3>& v) { return V.mul(v); };
+    auto project = [&](const std::array<float, 3>& v) {  // view space, z >= near
+        return P2{w * 0.5f + focal * v[0] / v[2], h * 0.5f - focal * v[1] / v[2], kNearZ / v[2]};
+    };
+    const float lw = std::max(1.0f, line_width * float(w) / 320.0f);
+    for (const HiresPrim& p : f.prims) {
+        if (!(p.proj.ox == 0 && p.proj.oy == 0 && p.proj.vp_w >= 320)) continue;  // sub-views live on the panel
+        if (p.kind == HiresPrim::Horizon) continue;                              // sky shader instead
+        bool is_flat = p.kind == HiresPrim::Dot || flat[p.object];
+        if (groups_.empty() || groups_.back().object != p.object || groups_.back().flat != is_flat)
+            groups_.push_back(Group{int(verts_.size()), 0, 0, p.object, is_flat, false});
+        std::vector<std::array<float, 3>> vv;
+        for (auto& v : p.v) vv.push_back(view(v));
+        if (p.kind == HiresPrim::Poly) {
+            auto clipped = clip_near(vv);
+            if (clipped.size() >= 3) {
+                std::vector<P2> pts;
+                for (auto& v : clipped) pts.push_back(project(v));
+                tri_fan(pts, color(p.color));
+            }
+        } else if (p.kind == HiresPrim::Line) {
+            auto a = vv[0], b = vv[1];
+            bool ain = a[2] >= kNearZ, bin = b[2] >= kNearZ;
+            if (ain || bin) {
+                if (ain != bin) {
+                    float t = (kNearZ - a[2]) / (b[2] - a[2]);
+                    std::array<float, 3> m = {a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]), kNearZ};
+                    (ain ? b : a) = m;
+                }
+                P2 pa = project(a), pb = project(b);
+                float dx = pb.x - pa.x, dy = pb.y - pa.y, len = std::sqrt(dx * dx + dy * dy), hw = lw * 0.5f;
+                float tx, ty, nx, ny;
+                if (len < 1e-3f) { tx = hw; ty = 0; nx = 0; ny = hw; }
+                else { tx = dx / len * hw; ty = dy / len * hw; nx = -ty; ny = tx; }
+                tri_fan({{pa.x - tx + nx, pa.y - ty + ny, pa.d}, {pb.x + tx + nx, pb.y + ty + ny, pb.d},
+                         {pb.x + tx - nx, pb.y + ty - ny, pb.d}, {pa.x - tx - nx, pa.y - ty - ny, pa.d}}, color(p.color));
+            }
+        } else if (p.kind == HiresPrim::Dot) {
+            if (vv[0][2] >= kNearZ) {
+                P2 q = project(vv[0]);
+                float s = std::max(1.0f, float(w) / 320.0f) * 0.5f;
+                tri_fan({{q.x - s, q.y - s, q.d}, {q.x + s, q.y - s, q.d}, {q.x + s, q.y + s, q.d}, {q.x - s, q.y + s, q.d}},
+                        color(p.color));
+            }
+        }
+        groups_.back().count = int(verts_.size()) - groups_.back().first;
+    }
+    runs_.back().count = int(verts_.size());
+
+    BindFramebuffer(GL_FRAMEBUFFER, ms_fbo_);
+    Viewport(0, 0, w, h);
+    Disable(GL_SCISSOR_TEST);
+    ClearColor(0, 0, 0, 1);
+    ClearDepth(0.0);
+    DepthMask(GL_TRUE);
+    Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    Disable(GL_DEPTH_TEST);
+    Disable(GL_BLEND);
+
+    // Sky and ground.
+    if (hor) {
+        UseProgram(sky_prog_);
+        Uniform2f(sky_loc_[0], float(w), float(h));
+        Uniform1f(sky_loc_[1], focal);
+        float hm[9];
+        for (int i = 0; i < 3; i++)
+            for (int j = 0; j < 3; j++) hm[j * 3 + i] = H.m[i][j];  // column-major
+        UniformMatrix3fv(sky_loc_[2], 1, GL_FALSE, hm);
+        Uniform3f(sky_loc_[3], hor->up[0], hor->up[1], hor->up[2]);
+        auto sky = color(hor->color), ground = color(hor->color2);
+        Uniform3f(sky_loc_[4], sky[0], sky[1], sky[2]);
+        Uniform3f(sky_loc_[5], ground[0], ground[1], ground[2]);
+        BindVertexArray(quad_vao_);
+        DrawArrays(GL_TRIANGLES, 0, 3);
+    }
+
+    // World.
+    UseProgram(world_prog_);
+    Uniform2f(world_size_loc_, float(w), float(h));
+    BindVertexArray(vao_);
+    BindBuffer(GL_ARRAY_BUFFER, vbo_);
+    BufferData(GL_ARRAY_BUFFER, GLsizeiptr(verts_.size() * sizeof(Vert)), verts_.data(), GL_STREAM_DRAW);
+    draw_groups();
+
+    // Instrument panel: page rows below the 3D viewport on a tilted quad.
+    {
         static std::vector<uint32_t> px(64000);
         for (int i = 0; i < 64000; i++) {
             const uint8_t* d = f.dac[f.page[i]];
-            uint32_t a = f.mask[i] ? 0u : 255u;
-            px[i] = a << 24 | uint32_t(d[0] * 255 / 63) << 16 | uint32_t(d[1] * 255 / 63) << 8 | uint32_t(d[2] * 255 / 63);
+            px[i] = 0xFF000000u | uint32_t(d[0] * 255 / 63) << 16 | uint32_t(d[1] * 255 / 63) << 8 | uint32_t(d[2] * 255 / 63);
         }
-        BindTexture(GL_TEXTURE_2D, overlay_tex_);
+        BindTexture(GL_TEXTURE_2D, panel_tex_);
         PixelStorei(GL_UNPACK_ALIGNMENT, 4);
         TexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 320, 200, GL_BGRA, GL_UNSIGNED_BYTE, px.data());
-        Enable(GL_BLEND);
-        BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        // Uploaded images are top row first; the framebuffer has NDC +1 at
-        // the image top, so map the quad bottom-up.
-        draw_textured(overlay_tex_, -1, -1, 1, 1);
-        Disable(GL_BLEND);
+        float rows = 200.0f - vp_h;
+        float pw = panel_width, ph = pw * rows * 1.2f / 320.0f;  // 4:3 pixel aspect
+        float t = panel_tilt_deg * 3.14159265f / 180.0f;
+        float ux = 0, uy = std::cos(t), uz = std::sin(t);  // panel "up" leans away
+        const float* c = panel_center;
+        float v0 = vp_h / 200.0f;
+        float verts[4][5] = {
+            {c[0] - pw / 2, c[1] + uy * ph / 2, c[2] + uz * ph / 2, 0, v0},
+            {c[0] + pw / 2, c[1] + uy * ph / 2, c[2] + uz * ph / 2, 1, v0},
+            {c[0] + pw / 2, c[1] - uy * ph / 2, c[2] - uz * ph / 2, 1, 1},
+            {c[0] - pw / 2, c[1] - uy * ph / 2, c[2] - uz * ph / 2, 0, 1},
+        };
+        (void)ux;
+        float tri[6][5];
+        int order[6] = {0, 1, 2, 0, 2, 3};
+        for (int i = 0; i < 6; i++) std::copy_n(verts[order[i]], 5, tri[i]);
+        // MVP: perspective (same focal as the world) * aircraft->view rotation.
+        float sx = 2 * focal / w, sy = 2 * focal / h, n = 0.01f, fa = 100.0f;
+        float P[16] = {sx, 0, 0, 0, 0, sy, 0, 0, 0, 0, (fa + n) / (fa - n), 1, 0, 0, -2 * fa * n / (fa - n), 0};
+        float R[16] = {V.m[0][0], V.m[1][0], V.m[2][0], 0, V.m[0][1], V.m[1][1], V.m[2][1], 0,
+                       V.m[0][2], V.m[1][2], V.m[2][2], 0, 0, 0, 0, 1};
+        float mvp[16];
+        for (int col = 0; col < 4; col++)
+            for (int row = 0; row < 4; row++) {
+                float acc = 0;
+                for (int k = 0; k < 4; k++) acc += P[k * 4 + row] * R[col * 4 + k];
+                mvp[col * 4 + row] = acc;
+            }
+        UseProgram(panel_prog_);
+        UniformMatrix4fv(panel_mvp_loc_, 1, GL_FALSE, mvp);
+        Uniform1i(panel_tex_loc_, 0);
+        ActiveTexture(GL_TEXTURE0);
+        BindTexture(GL_TEXTURE_2D, panel_tex_);
+        BindVertexArray(panel_vao_);
+        BindBuffer(GL_ARRAY_BUFFER, panel_vbo_);
+        BufferData(GL_ARRAY_BUFFER, sizeof tri, tri, GL_STREAM_DRAW);
+        Disable(GL_DEPTH_TEST);
+        DrawArrays(GL_TRIANGLES, 0, 6);
     }
+
+    BindFramebuffer(GL_READ_FRAMEBUFFER, ms_fbo_);
+    BindFramebuffer(GL_DRAW_FRAMEBUFFER, out_fbo_);
+    BlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
     BindFramebuffer(GL_FRAMEBUFFER, 0);
-    return out_tex_;
+    *out = out_tex_;
+    return true;
 }
 
 GLuint GlRenderer::upload(const uint32_t* argb, int w, int h) {

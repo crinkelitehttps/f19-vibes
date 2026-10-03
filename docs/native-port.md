@@ -207,6 +207,18 @@ thread renders snapshots and paces itself to the refresh, since vsync is
 not honoured under WSLg. `F19_PERF=1` prints display/game fps, emulation
 load and dropped time once a second.
 
+3D cockpit (`GlRenderer::render_cockpit3d`, cockpit view only — main
+viewport shorter than 200 rows): the main view's primitives are rendered
+through our own perspective camera (original 64° horizontal FOV at 4:3,
+wider windows see more) rotated by a head orientation; sky and ground are
+shaded per pixel from the camera-space up vector, reconstructed from the
+horizon inputs as (-s·[9B2], c·[9B2], -[9B0]); the page rows below the
+viewport (instrument panel, live each frame incl. map and TrackCam) are a
+texture on a quad in the aircraft frame (centre (0, -0.22, 0.9), width 1,
+top tilted 25° away). The HUD/canopy (top of the page) is not drawn.
+Limitation for freelook: the engine only draws objects inside its own
+forward view, so looking far aside shows sky/ground but no objects.
+
 View keys (from the key handler): F1 cockpit; Shift+F1..F6 external views
 (view variable `[9422]` = 87h, 84h, 85h, 89h, 88h, 8Bh). EGAME's INT 9 handler
 dedupes the BIOS key buffer using the AT BIOS bounds at 0040:0080/0082,

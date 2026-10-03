@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <cstring>
 #include <optional>
 #include <set>
@@ -286,6 +287,15 @@ void WorldCapture::capture_horizon() {
     float c = float(int16_t(ds16(cos_))) / 32768.0f;
     bool mode2 = ds16(view_mode_) == 2;
     p.sky_only = mode2;
+    // The engine's horizon is the vanishing line of the ground plane:
+    // -s*x + c*y = d in unscaled screen units (x = 256X/Z, y = 256Y/Z) with
+    // d = 256*up_n/up_d, so world up in camera space is proportional to
+    // (-s*up_d, c*up_d, -up_n).
+    {
+        float ux = -s * float(up_d), uy = c * float(up_d), uz = -float(up_n);
+        float n = std::sqrt(ux * ux + uy * uy + uz * uz);
+        if (n > 0) { p.up[0] = ux / n; p.up[1] = uy / n; p.up[2] = uz / n; }
+    }
     if (up_d <= 0x1F0B) {
         // Looking (nearly) straight up or down: one colour.
         p.uniform = true;

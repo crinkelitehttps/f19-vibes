@@ -1,6 +1,9 @@
 // F-19 native host (SDL3): runs the original game in the interpreter and
 // presents mode 13h / text mode in a window.
 //
+// In the cockpit view the world is rendered in 3D with the instrument panel
+// as a surface in the cockpit (F11 toggles; --flat-cockpit starts with the
+// original 2D layout). Hold the right mouse button and drag to look around.
 // F12 saves a screenshot (BMP) in the current directory, plus debug data
 // for the high-resolution renderer (captured primitives, the engine's own
 // 320x200 frame).
@@ -202,6 +205,7 @@ int main(int argc, char** argv) {
     double mips = 25.0;   // emulated CPU speed; the game renders as fast as it allows
     int msaa = 8;
     double vga_hz = 0;    // 0 = match the display
+    bool flat_cockpit = false;
     bool trace = false, original_driver = false, verify_driver = false, lowres = false, no_depth = false;
     for (int i = 1; i < argc; i++) {
         if (!std::strcmp(argv[i], "--scale") && i + 1 < argc) scale = std::atoi(argv[++i]);
@@ -213,6 +217,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--msaa") && i + 1 < argc) msaa = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--no-depth")) no_depth = true;
         else if (!std::strcmp(argv[i], "--vga-hz") && i + 1 < argc) vga_hz = std::atof(argv[++i]);
+        else if (!std::strcmp(argv[i], "--flat-cockpit")) flat_cockpit = true;
         else dir = argv[i];
     }
 
@@ -272,6 +277,9 @@ int main(int argc, char** argv) {
     std::vector<uint32_t> screen(640 * 400);
 
     bool want_screenshot = false;
+    bool cockpit3d = !flat_cockpit, looking = false;
+    float head_yaw = 0, head_pitch = 0, shown_yaw = 0, shown_pitch = 0;
+    bool shown_3d = false;
 
     // Match the emulated VGA refresh to the display, so each game frame
     // (the game syncs to vertical retrace) lines up with one display frame.
@@ -339,6 +347,26 @@ int main(int argc, char** argv) {
                 continue;
             }
             if (ev.type == SDL_EVENT_KEY_UP && ev.key.scancode == SDL_SCANCODE_F12) continue;
+            if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.scancode == SDL_SCANCODE_F11 && !ev.key.repeat) {
+                cockpit3d = !cockpit3d;
+                continue;
+            }
+            if (ev.type == SDL_EVENT_KEY_UP && ev.key.scancode == SDL_SCANCODE_F11) continue;
+            // Freelook (stand-in for head tracking): hold the right mouse
+            // button and drag; releasing recentres.
+            if (ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN && ev.button.button == SDL_BUTTON_RIGHT) {
+                looking = true;
+                SDL_SetWindowRelativeMouseMode(win, true);
+            }
+            if (ev.type == SDL_EVENT_MOUSE_BUTTON_UP && ev.button.button == SDL_BUTTON_RIGHT) {
+                looking = false;
+                SDL_SetWindowRelativeMouseMode(win, false);
+                head_yaw = head_pitch = 0;
+            }
+            if (ev.type == SDL_EVENT_MOUSE_MOTION && looking) {
+                head_yaw = std::clamp(head_yaw + ev.motion.xrel * 0.004f, -2.6f, 2.6f);
+                head_pitch = std::clamp(head_pitch - ev.motion.yrel * 0.004f, -1.2f, 1.3f);
+            }
             if (ev.type == SDL_EVENT_KEY_DOWN || ev.type == SDL_EVENT_KEY_UP) {
                 // Raw make/break codes go through port 60h + IRQ1 so the
                 // game's own keyboard handler sees held keys; the BIOS
@@ -388,8 +416,31 @@ int main(int argc, char** argv) {
         auto& frame = snap.frame;
         bool use_hires = snap.mode == 0x13 && frame && snap.now_us - frame->time_us < 300000;
         GLuint tex;
-        if (use_hires) {
-            if (frame != shown_frame || !hires_tex || hires_w != vw || hires_h != vh) {
+        bool full_window = false;
+        if (use_hires && cockpit3d) {
+            // 3D cockpit (cockpit view only): fills the whole window.
+            if (frame != shown_frame || !hires_tex || !shown_3d || hires_w != ow || hires_h != oh || head_yaw != shown_yaw ||
+                head_pitch != shown_pitch) {
+                GLuint t3;
+                if (renderer.render_cockpit3d(*frame, ow, oh, head_yaw, head_pitch, &t3)) {
+                    hires_tex = t3;
+                    shown_frame = frame;
+                    shown_3d = true;
+                    hires_w = ow;
+                    hires_h = oh;
+                    shown_yaw = head_yaw;
+                    shown_pitch = head_pitch;
+                } else {
+                    shown_3d = false;
+                }
+            }
+            full_window = shown_3d;
+        }
+        if (full_window) {
+            tex = hires_tex;
+        } else if (use_hires) {
+            if (frame != shown_frame || !hires_tex || shown_3d || hires_w != vw || hires_h != vh) {
+                shown_3d = false;
                 hires_tex = renderer.render_frame(*frame, vw, vh);
                 shown_frame = frame;
                 hires_w = vw;
@@ -418,7 +469,8 @@ int main(int argc, char** argv) {
             tex = renderer.upload(screen.data(), 640, 400);
             shown_frame = nullptr;
         }
-        renderer.present(tex, ow, oh, vx, vy, float(vw), float(vh));
+        if (full_window) renderer.present(tex, ow, oh, 0, 0, float(ow), float(oh));
+        else renderer.present(tex, ow, oh, vx, vy, float(vw), float(vh));
         if (want_screenshot) {
             want_screenshot = false;
             save_screenshot(renderer, ow, oh, use_hires ? frame.get() : nullptr);

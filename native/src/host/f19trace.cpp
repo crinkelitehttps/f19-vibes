@@ -9,6 +9,7 @@
 #include <memory>
 #include <vector>
 #include <cstdio>
+#include <tuple>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -198,6 +199,16 @@ int main(int argc, char** argv) {
             };
             save(hires_shot, true);
             save(hires_shot + ".world.ppm", false);
+            for (auto [suffix, yaw, pitch] : {std::tuple{".cockpit3d.ppm", 0.0f, 0.0f}, std::tuple{".cockpit3d-look.ppm", 0.35f, -0.15f}}) {
+                GLuint tex;
+                if (gr.render_cockpit3d(*frame, 1280, 720, yaw, pitch, &tex)) {
+                    auto rgb = gr.read_rgb(tex, 1280, 720);
+                    FILE* fo = std::fopen((hires_shot + suffix).c_str(), "wb");
+                    std::fprintf(fo, "P6\n1280 720\n255\n");
+                    std::fwrite(rgb.data(), 1, rgb.size(), fo);
+                    std::fclose(fo);
+                }
+            }
             gr.depth = false;
             save(hires_shot + ".nodepth.ppm", true);
             gr.depth = true;

@@ -42,6 +42,9 @@ struct HiresPrim {
     // or `uniform` = whole viewport one colour (color).
     float hx = 0, hy = 0, ux = 0, uy = 0;
     bool uniform = false, sky_only = false;
+    // Horizon: world "up" in camera space (x right, y up, z forward), for
+    // rendering sky/ground from any viewing direction.
+    float up[3] = {0, 1, 0};
 };
 
 struct HiresFrame {

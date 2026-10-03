@@ -27,6 +27,18 @@ public:
 
     // Composited frame at w x h; returns a texture valid until the next call.
     GLuint render_frame(const HiresFrame& f, int w, int h);
+    // 3D cockpit view (cockpit view frames only): the world rendered through
+    // our own perspective camera rotated by the head (yaw right / pitch up,
+    // radians), sky and ground per pixel, and the instrument panel (the
+    // page below the 3D viewport) as a textured quad in the cockpit.
+    // Returns a w x h texture; false if `f` is not a cockpit-view frame.
+    bool render_cockpit3d(const HiresFrame& f, int w, int h, float head_yaw, float head_pitch, GLuint* out);
+    // Panel placement in the aircraft frame (eye at origin, x right, y up,
+    // z forward; units arbitrary, only proportions matter).
+    float panel_width = 1.0f, panel_center[3] = {0.0f, -0.22f, 0.90f};
+    float panel_tilt_deg = 25.0f;   // top edge leans away from the viewer
+    float hfov_4x3_deg = 64.0f;     // the original's horizontal field of view
+
     // A w x h RGBA8 image (0xAARRGGBB words) as a texture (`nearest` filtering).
     GLuint upload(const uint32_t* argb, int w, int h);
     // Draw `tex` into the window's default framebuffer at `rect` (pixels,
@@ -58,6 +70,9 @@ private:
     void ensure_framebuffers(int w, int h);
     void build_geometry(const HiresFrame& f, int w, int h);
     void draw_textured(GLuint tex, float x0, float y0, float x1, float y1);  // NDC
+    GLuint sky_prog_ = 0, panel_prog_ = 0, panel_vao_ = 0, panel_vbo_ = 0, panel_tex_ = 0;
+    GLint sky_loc_[6] = {}, panel_mvp_loc_ = -1, panel_tex_loc_ = -1;
+    void draw_groups();
 };
 
 }  // namespace f19
