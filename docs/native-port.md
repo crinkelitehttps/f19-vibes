@@ -237,3 +237,34 @@ Replace game systems with native C++ one function at a time, starting with
 the flight model, each differential-tested against the interpreted
 original on recorded inputs. The interpreter remains as a fallback until
 nothing calls into it.
+
+## Status and next steps (2026-10-03)
+
+Working:
+- `build/native/f19 out/run/native` runs the full game natively: original
+  stages in the interpreter, native MGRAPHIC driver (80/84 slots, verified),
+  OpenGL renderer, emulation on its own thread (25 MIPS default, VGA refresh
+  = display refresh).
+- High-res 3D world (MSAA, object depth) via engine capture; cockpit view
+  as a 3D scene (panel as a tilted textured quad, HUD hidden); widescreen
+  external views; F11 toggles 3D/flat; right-drag mouse look; F12
+  screenshots (+ engine frame + primitive dump); F19_PERF=1 timing.
+- Headless checks: `build/native/f19trace out/run/demo_native -n 330 -k n1 -H x.ppm`
+  (demo flies itself; writes hi-res, world-only, page, mask, 3D renders).
+
+Open / next:
+- Freelook beyond ~±51°: the engine culls outside its frustum; needs the
+  engine to produce geometry for other directions (e.g. extra engine passes
+  with rotated camera, or widening its cull tables at 0x9BBC/0x9BC0).
+- Ground colour outside engine geometry is the engine ground colour (green)
+  even over sea.
+- HUD/canopy in the 3D cockpit: planned as wireframe (capture the HUD's
+  driver line/text calls instead of pixels).
+- Carrier wake not captured (another fill path); distant thin land slivers.
+- Possible residual hitches (user suspects their VNC session); measure with
+  F19_PERF=1.
+- Sound: PC speaker not emulated. Display modes other than VGA unsupported.
+- Long-term: 3D cockpit with instrument bitmaps on modelled screens; head
+  tracking via the head yaw/pitch already plumbed through the renderer;
+  progressive porting of game logic (flight model first, STREAM.DTA as a
+  regression input).
