@@ -158,8 +158,9 @@ thumbstick is the joystick, right trigger / grip are fire buttons 1 / 2,
 the left thumbstick's y is the throttle, the trackpads are four-way
 pads with a centre click for weapons, defences and flight controls (right
 trackpad: centre = HUD mode, right = `cycle` through the right CRT's
-pages), and the left menu button recentres the view (`recenter` action,
-same as Shift+F12).
+pages), the right menu button toggles the left CRT's map (F3), and the
+left menu button recentres the view (`recenter` action, same as
+Shift+F12).
 
 ## Not done
 
