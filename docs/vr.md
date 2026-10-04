@@ -44,6 +44,20 @@ unchanged with any OpenXR runtime and headset that tracks properly.
   demo holds ~57-60 fps of the headset's 60 Hz; at Monado's recommended
   2015x2015 it falls to 30-50.
 
+## Eye alignment
+
+With `WMR_SLAM=0` tracking is stable (the game runs well), but the left
+eye's image sits higher than the right and looks slightly right (also in
+`hello_xr`): Monado applies the AH101's factory display calibration
+imperfectly. OpenXR has no calibration tool; display correction is the
+runtime's job. Monado's workaround is `WMR_LEFT_DISPLAY_VIEW_Y_OFFSET` /
+`WMR_RIGHT_DISPLAY_VIEW_Y_OFFSET` (panel pixels, default 0, read at
+startup, applied in the distortion mesh); there is no horizontal
+equivalent. `tools/vr-offsets.sh` restarts Monado + `hello_xr` with
+offsets typed at a prompt, to find them by eye. Values for this headset:
+not yet found. If a horizontal error remains, the game could shift each
+eye's frustum itself.
+
 ## Options
 
 - **Another headset on Linux.** Anything with a solid OpenXR runtime should
