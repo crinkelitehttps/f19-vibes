@@ -36,7 +36,12 @@ target_link_libraries(f19hires PUBLIC f19core SDL3::SDL3)
 add_executable(f19trace src/host/f19trace.cpp)
 target_link_libraries(f19trace PRIVATE f19core f19hires)
 
-# Interactive host (SDL3).
-add_executable(f19 src/host/f19.cpp src/host/headtrack.cpp)
+# Interactive host (SDL3), with OpenXR output (--vr) on X11/GLX.
 find_package(Threads REQUIRED)
-target_link_libraries(f19 PRIVATE f19core f19hires ZLIB::ZLIB Threads::Threads)
+find_package(OpenXR REQUIRED CONFIG)
+find_package(OpenGL REQUIRED COMPONENTS GLX)
+find_package(X11 REQUIRED)
+add_executable(f19 src/host/f19.cpp src/host/headtrack.cpp src/host/xr.cpp)
+target_link_libraries(f19 PRIVATE f19core f19hires ZLIB::ZLIB Threads::Threads OpenXR::openxr_loader OpenGL::GLX X11::X11)
+# OpenXR structs are initialised as {XR_TYPE_...}, the rest zeroed.
+set_source_files_properties(src/host/xr.cpp PROPERTIES COMPILE_OPTIONS -Wno-missing-field-initializers)

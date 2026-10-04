@@ -14,10 +14,18 @@
 // for the high-resolution renderer (captured primitives, the engine's own
 // 320x200 frame).
 //
+// VR (--vr): OpenXR output, e.g. Monado with a WMR headset. The 3D view is
+// rendered per eye with the headset's pose (head tracking and mouse look
+// are ignored); menus and flat views appear on a virtual screen ahead of
+// the seat. Shift+F12 recentres. --vr-scale F scales the per-eye
+// resolution the runtime recommends (default 0.7: Monado recommends 1.4x
+// supersampling, too much for an integrated GPU); MSAA defaults to 4x in VR.
+//
 // Set F19_PERF=1 for a once-a-second timing summary.
 //
 // Usage: f19 [GAMEDIR] [--scale N] [--mips N] [--msaa N] [--vga-hz HZ] [--headtrack-port N] [--headtrack-bind ADDR]
 //            [--trace] [--original-driver] [--verify-driver] [--lowres] [--lod-detail F] [--terrain-radius N]
+//            [--vr] [--vr-scale F]
 //   --lod-detail F: > 1 keeps detailed models farther away (default 1 =
 //   switch at the same on-screen size as the original). --terrain-radius N:
 //   terrain tiles drawn in every direction per level (default 6).
@@ -46,6 +54,7 @@
 #include "hires/gl_render.h"
 #include "hires/world_capture.h"
 #include "host/headtrack.h"
+#include "host/xr.h"
 
 using namespace f19;
 
@@ -214,7 +223,9 @@ int main(int argc, char** argv) {
     std::string dir = ".";
     int scale = 4;
     double mips = 25.0;   // emulated CPU speed; the game renders as fast as it allows
-    int msaa = 8;
+    int msaa = 0;         // 0 = default (8, or 4 in VR)
+    bool vr = false;
+    float vr_scale = 0.7f;  // of the runtime's recommended eye size (supersampled); 0.7 ~ the AH101's panels
     double vga_hz = 0;    // 0 = match the display
     bool flat_cockpit = false;
     int headtrack_port = 4242;
@@ -237,6 +248,8 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--headtrack-bind") && i + 1 < argc) headtrack_bind = argv[++i];
         else if (!std::strcmp(argv[i], "--lod-detail") && i + 1 < argc) lod_detail = float(std::atof(argv[++i]));
         else if (!std::strcmp(argv[i], "--terrain-radius") && i + 1 < argc) terrain_radius = std::max(1, std::atoi(argv[++i]));
+        else if (!std::strcmp(argv[i], "--vr")) vr = true;
+        else if (!std::strcmp(argv[i], "--vr-scale") && i + 1 < argc) vr_scale = float(std::atof(argv[++i]));
         else dir = argv[i];
     }
 
@@ -288,10 +301,13 @@ int main(int argc, char** argv) {
     SDL_GL_SetSwapInterval(1);
     std::fprintf(stderr, "OpenGL: %s\n", reinterpret_cast<const char*>(gl::GetString(GL_RENDERER)));
     GlRenderer renderer;
-    renderer.msaa = msaa;
+    renderer.msaa = msaa > 0 ? msaa : vr ? 4 : 8;
     renderer.lod_detail = lod_detail;
     renderer.depth = !no_depth;
     if (!renderer.init()) std::fprintf(stderr, "warning: renderer initialisation reported a GL error\n");
+    XrOutput xr;
+    bool xr_on = vr && xr.init(vr_scale), xr_vsync_off = false;
+    if (vr && !xr_on) std::fprintf(stderr, "warning: VR unavailable; running on the desktop only\n");
     std::shared_ptr<const HiresFrame> shown_frame;
     GLuint hires_tex = 0;
     int hires_w = 0, hires_h = 0;
@@ -364,6 +380,7 @@ int main(int argc, char** argv) {
         std::shared_ptr<const HiresFrame> frame;
         uint64_t now_us = 0;
     } snap;
+    uint64_t perf_wait_ns = 0, perf_render_ns = 0, perf_submit_ns = 0;
     uint64_t perf_t0 = SDL_GetTicksNS(), perf_frames = 0, perf_emu_us0 = 0, next_frame_ns = 0;
     size_t perf_flips0 = 0;
     bool running = true;
@@ -372,7 +389,9 @@ int main(int argc, char** argv) {
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_EVENT_QUIT) running = false;
             if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.scancode == SDL_SCANCODE_F12 && !ev.key.repeat) {
-                want_screenshot = true;
+                // F12: screenshot; Shift+F12: recentre VR.
+                if ((ev.key.mod & SDL_KMOD_SHIFT) && xr_on) xr.recenter();
+                else want_screenshot = true;
                 continue;
             }
             if (ev.type == SDL_EVENT_KEY_UP && ev.key.scancode == SDL_SCANCODE_F12) continue;
@@ -426,6 +445,21 @@ int main(int argc, char** argv) {
             }
         }
 
+        // VR: the runtime paces the loop (xrWaitFrame) instead of vsync.
+        if (xr_on && !xr.poll()) {
+            xr_on = false;
+            std::fprintf(stderr, "openxr: session ended; desktop only\n");
+        }
+        const bool xr_frame = xr_on && xr.running();
+        if (xr_frame != xr_vsync_off) {
+            SDL_GL_SetSwapInterval(xr_frame ? 0 : 1);
+            xr_vsync_off = xr_frame;
+        }
+        const uint64_t t_wait0 = SDL_GetTicksNS();
+        const bool xr_render = xr_frame && xr.begin_frame();
+        const uint64_t t_wait1 = SDL_GetTicksNS();
+        perf_wait_ns += t_wait1 - t_wait0;
+
         // Snapshot what the renderer needs.
         {
             std::lock_guard<std::mutex> lk(mtx);
@@ -456,7 +490,20 @@ int main(int argc, char** argv) {
         bool use_hires = snap.mode == 0x13 && frame && snap.now_us - frame->time_us < 300000;
         GLuint tex;
         bool full_window = false;
-        if (use_hires && cockpit3d) {
+        // VR: the 3D view in stereo, mirrored in the window (right eye).
+        const bool vr_stereo = xr_render && use_hires && cockpit3d && xr.tracking();
+        if (vr_stereo) {
+            const int ew = xr.eye_width(), eh = xr.eye_height();
+            GLuint t = 0;
+            for (int i = 0; i < 2; i++) {
+                GLuint fb = xr.acquire_eye(i);
+                t = renderer.render_view(*frame, ew, eh, xr.eye(i), fb);
+                xr.release_eye(i);
+            }
+            float s = std::min(float(ow) / ew, float(oh) / eh);
+            renderer.present(t, ow, oh, (ow - ew * s) / 2, (oh - eh * s) / 2, ew * s, eh * s);
+            hires_tex = 0;  // the desktop paths must render afresh
+        } else if (use_hires && cockpit3d && !xr_frame) {
             // 3D view (cockpit and external views): fills the whole window.
             if (frame != shown_frame || !hires_tex || !shown_3d || hires_w != ow || hires_h != oh || head != shown_head) {
                 GLuint t3;
@@ -473,7 +520,9 @@ int main(int argc, char** argv) {
             }
             full_window = shown_3d;
         }
-        if (full_window) {
+        if (vr_stereo) {
+            tex = 0;
+        } else if (full_window) {
             tex = hires_tex;
         } else if (use_hires) {
             if (frame != shown_frame || !hires_tex || shown_3d || hires_w != vw || hires_h != vh) {
@@ -506,17 +555,31 @@ int main(int argc, char** argv) {
             tex = renderer.upload(screen.data(), 640, 400);
             shown_frame = nullptr;
         }
-        if (full_window) renderer.present(tex, ow, oh, 0, 0, float(ow), float(oh));
-        else renderer.present(tex, ow, oh, vx, vy, float(vw), float(vh));
+        if (vr_stereo) {
+            // drawn above
+        } else {
+            if (xr_render) {
+                // Virtual screen in VR.
+                GLuint fb = xr.acquire_screen();
+                renderer.present_to(fb, tex, XrOutput::kScreenW, XrOutput::kScreenH, 0, 0, XrOutput::kScreenW, XrOutput::kScreenH);
+                xr.release_screen();
+            }
+            if (full_window) renderer.present(tex, ow, oh, 0, 0, float(ow), float(oh));
+            else renderer.present(tex, ow, oh, vx, vy, float(vw), float(vh));
+        }
+        const uint64_t t_submit0 = SDL_GetTicksNS();
+        perf_render_ns += t_submit0 - t_wait1;
+        if (xr_frame) xr.end_frame();
         if (want_screenshot) {
             want_screenshot = false;
             save_screenshot(renderer, ow, oh, use_hires ? frame.get() : nullptr);
         }
         SDL_GL_SwapWindow(win);
+        perf_submit_ns += SDL_GetTicksNS() - t_submit0;
 
         // Pace to the display refresh in case the driver ignores vsync
         // (seen under WSLg): sleep until the next frame slot.
-        {
+        if (!xr_frame) {
             uint64_t period = uint64_t(1e9 / vga_hz);
             uint64_t t = SDL_GetTicksNS();
             if (next_frame_ns == 0 || t > next_frame_ns + period) next_frame_ns = t;
@@ -536,6 +599,10 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "perf: display %.0f fps, game %.0f fps, emulated %.0f ms per s, emulation busy %.0f%%, dropped %llu\n",
                          perf_frames / secs, (flips - perf_flips0) / secs, (snap.now_us - perf_emu_us0) / 1000.0 / secs,
                          perf_busy_ns.exchange(0) / 1e7 / secs, (unsigned long long)perf_drops.exchange(0));
+            if (xr_frame)
+                std::fprintf(stderr, "perf: vr per frame: wait %.1f ms, render %.1f ms, submit+swap %.1f ms\n",
+                             perf_wait_ns / 1e6 / perf_frames, perf_render_ns / 1e6 / perf_frames, perf_submit_ns / 1e6 / perf_frames);
+            perf_wait_ns = perf_render_ns = perf_submit_ns = 0;
             perf_t0 = pnow;
             perf_frames = 0;
             perf_flips0 = flips;

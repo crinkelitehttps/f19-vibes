@@ -51,15 +51,15 @@ void main() {
 // Per-pixel sky/ground: ray in view space -> aircraft space (u_head) ->
 // sign against world up.
 const char* kSkyFS = R"(#version 330 core
-uniform vec2 u_size;
-uniform float u_focal;
+uniform vec2 u_center;  // principal point (window pixels, GL orientation)
+uniform vec2 u_focal;
 uniform mat3 u_head;
 uniform vec3 u_up;
 uniform vec3 u_sky;
 uniform vec3 u_ground;
 out vec4 o_col;
 void main() {
-    vec3 d = vec3((gl_FragCoord.x - u_size.x * 0.5) / u_focal, (gl_FragCoord.y - u_size.y * 0.5) / u_focal, 1.0);
+    vec3 d = vec3((gl_FragCoord.xy - u_center) / u_focal, 1.0);
     vec3 a = u_head * d;
     o_col = vec4(dot(a, u_up) > 0.0 ? u_sky : u_ground, 1.0);
 })";
@@ -189,7 +189,7 @@ bool GlRenderer::init() {
 
     // 3D cockpit.
     sky_prog_ = link(kSkyVS, kSkyFS);
-    const char* sky_names[6] = {"u_size", "u_focal", "u_head", "u_up", "u_sky", "u_ground"};
+    const char* sky_names[6] = {"u_center", "u_focal", "u_head", "u_up", "u_sky", "u_ground"};
     for (int i = 0; i < 6; i++) sky_loc_[i] = GetUniformLocation(sky_prog_, sky_names[i]);
     panel_prog_ = link(kPanelVS, kPanelFS);
     panel_mvp_loc_ = GetUniformLocation(panel_prog_, "u_mvp");
@@ -495,6 +495,24 @@ M3 transpose(const M3& a) {
 }  // namespace
 
 bool GlRenderer::render_cockpit3d(const HiresFrame& f, int w, int h, const HeadPose& head, GLuint* out) {
+    // Keep the original horizontal FOV at 4:3; wider windows see more.
+    const float tan_v = std::tan(hfov_4x3_deg * 0.5f * 3.14159265f / 180.0f) * 0.75f;
+    const float tan_h = tan_v * float(w) / float(h);
+    EyeView eye;
+    M3 H = head_matrix(head.yaw, head.pitch, head.roll);
+    std::copy_n(&H.m[0][0], 9, &eye.rot[0][0]);
+    eye.pos[0] = head.x;
+    eye.pos[1] = head.y;
+    eye.pos[2] = -head.z;  // HeadPose z is back +
+    eye.tan_left = -tan_h;
+    eye.tan_right = tan_h;
+    eye.tan_down = -tan_v;
+    eye.tan_up = tan_v;
+    *out = render_view(f, w, h, eye, 0);
+    return true;
+}
+
+GLuint GlRenderer::render_view(const HiresFrame& f, int w, int h, const EyeView& eye, GLuint dst) {
     // The main view is the full-width viewport at the page origin; in the
     // cockpit view it stops above the instrument panel.
     const HiresPrim* hor = nullptr;
@@ -508,12 +526,15 @@ bool GlRenderer::render_cockpit3d(const HiresFrame& f, int w, int h, const HeadP
     const bool external = vp_h >= 200;  // external views: no panel; 2D layer centred 4:3
 
     ensure_framebuffers(w, h);
-    const float aspect = float(w) / float(h);
-    // Keep the original horizontal FOV at 4:3; wider windows see more.
-    const float tan_v = std::tan(hfov_4x3_deg * 0.5f * 3.14159265f / 180.0f) * 0.75f;
-    const float focal = (h * 0.5f) / tan_v;
-    (void)aspect;
-    M3 H = head_matrix(head.yaw, head.pitch, head.roll), V = transpose(H);  // V: aircraft -> view
+    // Pinhole camera in pixels (top-left origin) from the frustum.
+    const float fx = w / (eye.tan_right - eye.tan_left), fy = h / (eye.tan_up - eye.tan_down);
+    const float cx = -eye.tan_left * fx, cy = eye.tan_up * fy;
+    M3 H;
+    std::copy_n(&eye.rot[0][0], 9, &H.m[0][0]);
+    M3 V = transpose(H);  // V: aircraft -> view
+    // The eye's offset in the world (camera-space units: 65536 per world unit).
+    const float wk = world_units_per_cm * 65536.0f;
+    const std::array<float, 3> eye_world = {eye.pos[0] * wk, eye.pos[1] * wk, eye.pos[2] * wk};
 
     // World primitives of the main view, projected by our camera: the
     // native scene, or the engine's captured primitives.
@@ -525,8 +546,14 @@ bool GlRenderer::render_cockpit3d(const HiresFrame& f, int w, int h, const HeadP
         SceneBuildParams sp;
         // The engine's LOD distances suit its 256-pixel focal length; scale
         // them to ours so models switch at the same on-screen size.
-        sp.lod_scale = std::max(1.0f, focal / 256.0f) * lod_detail;
-        build_scene_prims(*f.scene, sp, scene_prims_);
+        sp.lod_scale = std::max(1.0f, fx / 256.0f) * lod_detail;
+        // Both eyes of a stereo frame share the build.
+        if (&f != scene_frame_ || f.time_us != scene_time_ || sp.lod_scale != scene_lod_) {
+            build_scene_prims(*f.scene, sp, scene_prims_);
+            scene_frame_ = &f;
+            scene_time_ = f.time_us;
+            scene_lod_ = sp.lod_scale;
+        }
         prims = &scene_prims_;
     }
     std::map<uint32_t, std::vector<const HiresPrim*>> by_object;
@@ -539,9 +566,11 @@ bool GlRenderer::render_cockpit3d(const HiresFrame& f, int w, int h, const HeadP
         for (size_t i = 1; i + 1 < pts.size(); i++)
             for (const P2& p : {pts[0], pts[i], pts[i + 1]}) verts_.push_back({p.x, p.y, p.d, c[0], c[1], c[2], c[3]});
     };
-    auto view = [&](const std::array<float, 3>& v) { return V.mul(v); };
+    auto view = [&](const std::array<float, 3>& v) {
+        return V.mul({v[0] - eye_world[0], v[1] - eye_world[1], v[2] - eye_world[2]});
+    };
     auto project = [&](const std::array<float, 3>& v) {  // view space, z >= near
-        return P2{w * 0.5f + focal * v[0] / v[2], h * 0.5f - focal * v[1] / v[2], kNearZ / v[2]};
+        return P2{cx + fx * v[0] / v[2], cy - fy * v[1] / v[2], kNearZ / v[2]};
     };
     const float lw = std::max(1.0f, line_width * float(w) / 320.0f);
     for (const HiresPrim& p : *prims) {
@@ -601,8 +630,8 @@ bool GlRenderer::render_cockpit3d(const HiresFrame& f, int w, int h, const HeadP
     // Sky and ground.
     if (hor) {
         UseProgram(sky_prog_);
-        Uniform2f(sky_loc_[0], float(w), float(h));
-        Uniform1f(sky_loc_[1], focal);
+        Uniform2f(sky_loc_[0], cx, h - cy);
+        Uniform2f(sky_loc_[1], fx, fy);
         float hm[9];
         for (int i = 0; i < 3; i++)
             for (int j = 0; j < 3; j++) hm[j * 3 + i] = H.m[i][j];  // column-major
@@ -645,12 +674,13 @@ bool GlRenderer::render_cockpit3d(const HiresFrame& f, int w, int h, const HeadP
         // * eye offset (head position; z back +, aircraft z forward). The eye
         // stays behind the panel.
         const float* c = panel_center;
-        float ex = head.x * panel_units_per_cm, ey = head.y * panel_units_per_cm;
-        float ez = std::min(-head.z * panel_units_per_cm, c[2] - 0.25f);
+        float ex = eye.pos[0] * panel_units_per_cm, ey = eye.pos[1] * panel_units_per_cm;
+        float ez = std::min(eye.pos[2] * panel_units_per_cm, c[2] - 0.25f);
         float tv[3];
         for (int i = 0; i < 3; i++) tv[i] = -(V.m[i][0] * ex + V.m[i][1] * ey + V.m[i][2] * ez);
-        float sx = 2 * focal / w, sy = 2 * focal / h, n = 0.01f, fa = 100.0f;
-        float P[16] = {sx, 0, 0, 0, 0, sy, 0, 0, 0, 0, (fa + n) / (fa - n), 1, 0, 0, -2 * fa * n / (fa - n), 0};
+        float sx = 2 * fx / w, sy = 2 * fy / h, n = 0.01f, fa = 100.0f;
+        float ox = 2 * cx / w - 1, oy = 1 - 2 * cy / h;  // off-centre (asymmetric) frustum
+        float P[16] = {sx, 0, 0, 0, 0, sy, 0, 0, ox, oy, (fa + n) / (fa - n), 1, 0, 0, -2 * fa * n / (fa - n), 0};
         float R[16] = {V.m[0][0], V.m[1][0], V.m[2][0], 0, V.m[0][1], V.m[1][1], V.m[2][1], 0,
                        V.m[0][2], V.m[1][2], V.m[2][2], 0, tv[0], tv[1], tv[2], 1};
         float mvp[16];
@@ -731,9 +761,13 @@ bool GlRenderer::render_cockpit3d(const HiresFrame& f, int w, int h, const HeadP
         draw_textured(overlay_tex_, -half, -1, half, 1);
         Disable(GL_BLEND);
     }
+    if (dst) {
+        BindFramebuffer(GL_READ_FRAMEBUFFER, out_fbo_);
+        BindFramebuffer(GL_DRAW_FRAMEBUFFER, dst);
+        BlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    }
     BindFramebuffer(GL_FRAMEBUFFER, 0);
-    *out = out_tex_;
-    return true;
+    return out_tex_;
 }
 
 GLuint GlRenderer::upload(const uint32_t* argb, int w, int h) {
@@ -759,8 +793,8 @@ void GlRenderer::draw_textured(GLuint tex, float x0, float y0, float x1, float y
     DrawArrays(GL_TRIANGLES, 0, 6);
 }
 
-void GlRenderer::present(GLuint tex, int win_w, int win_h, float x, float y, float w, float h) {
-    BindFramebuffer(GL_FRAMEBUFFER, 0);
+void GlRenderer::present_to(GLuint fbo, GLuint tex, int win_w, int win_h, float x, float y, float w, float h) {
+    BindFramebuffer(GL_FRAMEBUFFER, fbo);
     Viewport(0, 0, win_w, win_h);
     ClearColor(0, 0, 0, 1);
     Clear(GL_COLOR_BUFFER_BIT);
