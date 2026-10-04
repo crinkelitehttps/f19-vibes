@@ -273,7 +273,8 @@ neutral if no data arrives for 1 s. `f19trace -H` also writes a
 VR (`native/src/host/xr.cpp`, `f19 --vr`): OpenXR output, stereo 3D view
 through `GlRenderer::render_view` (per-eye pose and asymmetric frustum),
 menus on a virtual screen. Works end to end with Monado and an Acer WMR
-headset, but that headset's tracking under Linux made it unplayable. Setup,
+headset (rotation-only tracking, per-eye display offsets); Basalt 6DOF
+diverges on it. Setup,
 findings, implementation and options: [vr.md](vr.md).
 
 View keys (from the key handler): F1 cockpit; Shift+F1..F6 external views
@@ -325,10 +326,9 @@ Open / next:
 - Carrier wake not captured (another fill path); distant thin land slivers.
 - Possible residual hitches (user suspects their VNC session); measure with
   F19_PERF=1.
-- VR: code works (see vr.md); not playable with the WMR headset on
-  Linux (Basalt 6DOF diverges, IMU-only 3DOF unusable). Next step depends
-  on hardware: a headset with a good Linux OpenXR runtime, or a Windows
-  port (WMR needs Windows 10 / 11 23H2 or older).
+- VR: playable with the WMR headset (3DOF, offsets in vr.md). Not done:
+  external views' overlay head-locked, 90 Hz, world/cockpit scale check,
+  6DOF (Basalt diverges).
 - Sound: PC speaker not emulated. Display modes other than VGA unsupported.
 - Long-term: 3D cockpit with instrument bitmaps on modelled screens;
   progressive porting of game logic (flight model first, STREAM.DTA as a

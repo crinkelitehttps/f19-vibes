@@ -1,10 +1,17 @@
 # VR (OpenXR) — status and notes
 
-State on 2026-10-04: the game's OpenXR output works end to end (stereo
-cockpit, virtual screen for menus, recentring), but VR is **not playable on
-the current hardware**: the headset's tracking under Linux is the problem,
-not the renderer. The code is kept; it is runtime-agnostic and should work
-unchanged with any OpenXR runtime and headset that tracks properly.
+State on 2026-10-04: **working** with the Acer AH101 under Monado, with
+rotation-only tracking and a per-eye display correction:
+
+```
+WMR_SLAM=0 WMR_HANDTRACKING=0 \
+WMR_LEFT_DISPLAY_VIEW_Y_OFFSET=50 WMR_RIGHT_DISPLAY_VIEW_Y_OFFSET=-50 monado-service &
+sleep 3; build/native/f19 out/run/native --vr     # Shift+F12 recentres
+```
+
+Camera-based 6DOF (Basalt) diverges on this setup and is left off, so
+leaning is not tracked and the heading drifts slowly (recentre). The code
+is runtime-agnostic and should work unchanged with any OpenXR runtime.
 
 ## Hardware and software tried
 
@@ -38,8 +45,11 @@ unchanged with any OpenXR runtime and headset that tracks properly.
   check. Not investigated further; usual suspects are lighting/texture in
   the room, camera exposure (`WMR_AUTOEXPOSURE`, `WMR_UNIFY_EXPGAIN`), the
   headset's factory calibration, or a Monado/Basalt version mismatch.
-- **IMU-only 3DOF (`WMR_SLAM=0`)** avoids the runaway but the user found it
-  unusable too.
+- **IMU-only 3DOF (`WMR_SLAM=0`)** is stable: the game runs well with it.
+  (A first test looked unusable, but the game had connected to a still
+  running Monado with Basalt: a second `monado-service` exits at once with
+  "already running", so check `pgrep monado-service` when changing
+  settings.)
 - Performance was acceptable: at `--vr-scale 0.7` (1410x1410 per eye) the
   demo holds ~57-60 fps of the headset's 60 Hz; at Monado's recommended
   2015x2015 it falls to 30-50.
@@ -47,16 +57,16 @@ unchanged with any OpenXR runtime and headset that tracks properly.
 ## Eye alignment
 
 With `WMR_SLAM=0` tracking is stable (the game runs well), but the left
-eye's image sits higher than the right and looks slightly right (also in
+eye's image sits higher than the right, seen as doubled images (also in
 `hello_xr`): Monado applies the AH101's factory display calibration
 imperfectly. OpenXR has no calibration tool; display correction is the
 runtime's job. Monado's workaround is `WMR_LEFT_DISPLAY_VIEW_Y_OFFSET` /
 `WMR_RIGHT_DISPLAY_VIEW_Y_OFFSET` (panel pixels, default 0, read at
 startup, applied in the distortion mesh); there is no horizontal
 equivalent. `tools/vr-offsets.sh` restarts Monado + `hello_xr` with
-offsets typed at a prompt, to find them by eye. Values for this headset:
-not yet found. If a horizontal error remains, the game could shift each
-eye's frustum itself.
+offsets typed at a prompt, to find them by eye. For this AH101 the
+misalignment was purely vertical and `+50` (left 50, right -50) merges
+the two eyes' images.
 
 ## Options
 
