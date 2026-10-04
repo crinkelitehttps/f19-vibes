@@ -154,8 +154,11 @@ and syncs them each frame while the session is focused
 (`XrOutput::controllers`). The state goes through the gamepad bindings
 (`native/gamepad.cfg`, `left-`/`right-` controls): by default the right
 thumbstick is the joystick, right trigger / grip are fire buttons 1 / 2,
-the left thumbstick's y is the throttle, and the trackpads are four-way
-pads with a centre click for weapons, defences and flight controls.
+the left thumbstick's y is the throttle, the trackpads are four-way
+pads with a centre click for weapons, defences and flight controls (right
+trackpad: centre = HUD mode, right = `cycle` through the right CRT's
+pages), and the left menu button recentres the view (`recenter` action,
+same as Shift+F12).
 
 ## Not done
 

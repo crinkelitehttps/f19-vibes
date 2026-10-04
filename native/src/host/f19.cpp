@@ -421,6 +421,7 @@ int main(int argc, char** argv) {
         MotionControllers vr_pads;
         const bool vr_pads_on = xr_on && xr.controllers(vr_pads);
         const Gamepad::State pad = gamepad.update(SDL_GetTicksNS(), vr_pads_on ? &vr_pads : nullptr);
+        if (pad.recenter && xr_on) xr.recenter();
         {
             std::lock_guard<std::mutex> lk(mtx);
             m.joystick.connected = pad.connected;

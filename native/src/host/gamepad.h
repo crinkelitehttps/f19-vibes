@@ -44,6 +44,7 @@ public:
         float stick_x = 0, stick_y = 0;  // -1..1, y down +
         bool button[2] = {};
         float look_x = 0, look_y = 0;    // -1..1, y up +
+        bool recenter = false;           // a recenter binding was just pressed
     };
     State update(uint64_t now_ns, const MotionControllers* vr = nullptr);
 
@@ -62,13 +63,17 @@ private:
         int half = 0;   // axis as button: -1 / +1 (0: full axis, or trigger)
         bool full_axis() const;
     };
-    enum class Action { StickX, StickY, LookX, LookY, Button1, Button2, Key };
+    enum class Action { StickX, StickY, LookX, LookY, Button1, Button2, Key, Cycle, Recenter };
+    struct Chord {
+        SDL_Scancode sc = SDL_SCANCODE_UNKNOWN;
+        SDL_Keymod mod = SDL_KMOD_NONE;
+    };
     struct Binding {
         Control control;
         Action action;
         bool invert = false;
-        SDL_Scancode key = SDL_SCANCODE_UNKNOWN;
-        SDL_Keymod mod = SDL_KMOD_NONE;
+        std::vector<Chord> keys;  // Key: one; Cycle: pressed in turn
+        size_t step = 0;          // Cycle: the key the next press sends
         bool held = false;
         uint64_t next_repeat_ns = 0;
     };

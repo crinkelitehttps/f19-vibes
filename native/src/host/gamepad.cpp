@@ -55,9 +55,12 @@ bool Gamepad::load(const std::string& text, const std::string& source) {
     for (int lineno = 1; std::getline(in, line); lineno++) {
         if (auto hash = line.find('#'); hash != std::string::npos) line.resize(hash);
         std::istringstream ls(line);
-        std::string control, action, arg, extra;
+        std::string control, action, arg;
         if (!(ls >> control)) continue;
-        ls >> action >> arg >> extra;
+        ls >> action;
+        std::vector<std::string> args;
+        for (std::string a; ls >> a;) args.push_back(a);
+        if (!args.empty()) arg = args[0];
         auto fail = [&](const char* why) {
             std::fprintf(stderr, "%s:%d: %s\n", source.c_str(), lineno, why);
             ok = false;
@@ -107,31 +110,38 @@ bool Gamepad::load(const std::string& text, const std::string& source) {
             b.action = action == "stick-x" ? Action::StickX : action == "stick-y" ? Action::StickY
                      : action == "look-x" ? Action::LookX : Action::LookY;
             if (!full_axis) { fail((action + " needs a stick or trackpad axis (e.g. leftx, right-thumbstick-y)").c_str()); continue; }
-            if (arg == "invert") b.invert = true;
-            else if (!arg.empty()) { fail(("unexpected '" + arg + "'").c_str()); continue; }
-        } else if (action == "button1" || action == "button2" || action == "key") {
+            if (arg == "invert" && args.size() == 1) b.invert = true;
+            else if (!args.empty()) { fail(("unexpected '" + arg + "'").c_str()); continue; }
+        } else if (action == "button1" || action == "button2" || action == "key" || action == "cycle" || action == "recenter") {
             if (full_axis) { fail(("use " + control + "- or " + control + "+ to act as a button").c_str()); continue; }
-            if (action == "key") {
-                b.action = Action::Key;
-                if (arg.empty() || !extra.empty()) { fail("expected one key, e.g. 'key shift+f1'"); continue; }
-                std::string k = arg;
+            if (action == "key" || action == "cycle") {
+                b.action = action == "key" ? Action::Key : Action::Cycle;
+                if (action == "key" && args.size() != 1) { fail("expected one key, e.g. 'key shift+f1'"); continue; }
+                if (action == "cycle" && args.size() < 2) { fail("expected two or more keys, e.g. 'cycle f4 f5 f6'"); continue; }
                 bool bad = false;
-                for (size_t plus; !bad && k.size() > 1 && (plus = k.find('+')) != std::string::npos;) {
-                    std::string m = k.substr(0, plus);
-                    if (!SDL_strcasecmp(m.c_str(), "shift")) b.mod |= SDL_KMOD_LSHIFT;
-                    else if (!SDL_strcasecmp(m.c_str(), "ctrl")) b.mod |= SDL_KMOD_LCTRL;
-                    else if (!SDL_strcasecmp(m.c_str(), "alt")) b.mod |= SDL_KMOD_LALT;
-                    else bad = true;
-                    k.erase(0, plus + 1);
+                for (const std::string& a : args) {
+                    Chord c;
+                    std::string k = a;
+                    for (size_t plus; !bad && k.size() > 1 && (plus = k.find('+')) != std::string::npos;) {
+                        std::string m = k.substr(0, plus);
+                        if (!SDL_strcasecmp(m.c_str(), "shift")) c.mod |= SDL_KMOD_LSHIFT;
+                        else if (!SDL_strcasecmp(m.c_str(), "ctrl")) c.mod |= SDL_KMOD_LCTRL;
+                        else if (!SDL_strcasecmp(m.c_str(), "alt")) c.mod |= SDL_KMOD_LALT;
+                        else bad = true;
+                        k.erase(0, plus + 1);
+                    }
+                    c.sc = parse_key_name(k);
+                    if (bad || c.sc == SDL_SCANCODE_UNKNOWN || !key_supported(c.sc)) {
+                        fail(("unknown key '" + a + "'").c_str());
+                        bad = true;
+                        break;
+                    }
+                    b.keys.push_back(c);
                 }
-                b.key = parse_key_name(k);
-                if (bad || b.key == SDL_SCANCODE_UNKNOWN || !key_supported(b.key)) {
-                    fail(("unknown key '" + arg + "'").c_str());
-                    continue;
-                }
+                if (bad) continue;
             } else {
-                b.action = action == "button1" ? Action::Button1 : Action::Button2;
-                if (!arg.empty()) { fail(("unexpected '" + arg + "'").c_str()); continue; }
+                b.action = action == "button1" ? Action::Button1 : action == "button2" ? Action::Button2 : Action::Recenter;
+                if (!args.empty()) { fail(("unexpected '" + arg + "'").c_str()); continue; }
             }
         } else {
             fail(action.empty() ? "missing action" : ("unknown action '" + action + "'").c_str());
@@ -210,22 +220,23 @@ bool Gamepad::pressed(const Control& c) const {
 
 void Gamepad::key(const Binding& b, bool down) {
     if (!send_key) return;
+    const Chord& c = b.keys[b.step];
     static const struct { SDL_Keymod mod; SDL_Scancode sc; } mods[] = {
         {SDL_KMOD_LCTRL, SDL_SCANCODE_LCTRL}, {SDL_KMOD_LALT, SDL_SCANCODE_LALT}, {SDL_KMOD_LSHIFT, SDL_SCANCODE_LSHIFT},
     };
     if (down)
         for (auto& m : mods)
-            if (b.mod & m.mod) send_key(m.sc, b.mod, true);
-    send_key(b.key, b.mod, down);
+            if (c.mod & m.mod) send_key(m.sc, c.mod, true);
+    send_key(c.sc, c.mod, down);
     if (!down)
         for (auto& m : mods)
-            if (b.mod & m.mod) send_key(m.sc, SDL_KMOD_NONE, false);
+            if (c.mod & m.mod) send_key(m.sc, SDL_KMOD_NONE, false);
 }
 
 void Gamepad::release_all() {
     for (auto& b : bindings_)
         if (b.held) {
-            if (b.action == Action::Key) key(b, false);
+            if (!b.keys.empty()) key(b, false);
             b.held = false;
         }
 }
@@ -248,11 +259,28 @@ Gamepad::State Gamepad::update(uint64_t now_ns, const MotionControllers* vr) {
                     key(b, true);
                     b.next_repeat_ns = now_ns + kRepeatDelayNs;
                 } else if (p && now_ns >= b.next_repeat_ns) {
-                    if (send_key) send_key(b.key, b.mod, true);
+                    if (send_key) send_key(b.keys[0].sc, b.keys[0].mod, true);
                     b.next_repeat_ns = now_ns + kRepeatPeriodNs;
                 } else if (!p && b.held) {
                     key(b, false);
                 }
+                b.held = p;
+                break;
+            }
+            case Action::Cycle: {
+                // One key per press, the next one each time (no repeat).
+                bool p = pressed(b.control);
+                if (p && !b.held) key(b, true);
+                else if (!p && b.held) {
+                    key(b, false);
+                    b.step = (b.step + 1) % b.keys.size();
+                }
+                b.held = p;
+                break;
+            }
+            case Action::Recenter: {
+                bool p = pressed(b.control);
+                s.recenter |= p && !b.held;
                 b.held = p;
                 break;
             }
