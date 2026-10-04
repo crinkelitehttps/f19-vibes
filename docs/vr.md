@@ -9,6 +9,9 @@ WMR_LEFT_DISPLAY_VIEW_Y_OFFSET=50 WMR_RIGHT_DISPLAY_VIEW_Y_OFFSET=-50 monado-ser
 sleep 3; build/native/f19 out/run/native --vr     # Shift+F12 recentres
 ```
 
+`./build-run-vr.sh` does all of this (restarts Monado with these settings,
+builds, runs). Brakes are `0` (toggle); full keys in `fullgame/F19.KEY`.
+
 Camera-based 6DOF (Basalt) diverges on this setup and is left off, so
 leaning is not tracked and the heading drifts slowly (recentre). The code
 is runtime-agnostic and should work unchanged with any OpenXR runtime.
