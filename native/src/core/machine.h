@@ -100,6 +100,14 @@ public:
     // Take the next key from the BIOS buffer (ascii | scan << 8), if any.
     bool key_pop(uint16_t* key);
     bool key_available() const;
+    // Game port (201h), joystick A. Axes -1..1 (x right +, y down +, as
+    // the stick's resistance); while disconnected the port reads as empty.
+    struct Joystick {
+        bool connected = false;
+        float x = 0, y = 0;
+        bool button[2] = {};
+    } joystick;
+
     // Inside a native interrupt handler: make the INT re-execute later
     // (blocking calls), letting timer interrupts run meanwhile.
     void block_and_retry();
@@ -132,6 +140,7 @@ private:
     bool irq1_in_service_ = false;
     std::deque<std::pair<uint8_t, uint16_t>> kbd_queue_;
     uint8_t port60_ = 0;
+    uint64_t joy_fired_ = 0;        // instruction count at the last 201h write
     uint16_t kbd_bios_key_ = 0;
     void service_keyboard();
     uint64_t last_service_ = 0;

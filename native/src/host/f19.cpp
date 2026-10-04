@@ -21,11 +21,17 @@
 // resolution the runtime recommends (default 0.7: Monado recommends 1.4x
 // supersampling, too much for an integrated GPU); MSAA defaults to 4x in VR.
 //
+// Gamepad (e.g. Xbox controller): the left stick and A/B are the PC
+// joystick (answer Y to "Do you have a joystick?" in setup), the right
+// stick looks around, other buttons press keys. In VR the motion
+// controllers can do the same (right thumbstick, trigger and grip fly). Bindings: native/gamepad.cfg
+// (built in), overridden by ~/.config/f19/gamepad.cfg or --gamepad FILE.
+//
 // Set F19_PERF=1 for a once-a-second timing summary.
 //
 // Usage: f19 [GAMEDIR] [--scale N] [--mips N] [--msaa N] [--vga-hz HZ] [--headtrack-port N] [--headtrack-bind ADDR]
 //            [--trace] [--original-driver] [--verify-driver] [--lowres] [--lod-detail F] [--terrain-radius N]
-//            [--vr] [--vr-scale F]
+//            [--vr] [--vr-scale F] [--gamepad FILE]
 //   --lod-detail F: > 1 keeps detailed models farther away (default 1 =
 //   switch at the same on-screen size as the original). --terrain-radius N:
 //   terrain tiles drawn in every direction per level (default 6).
@@ -42,7 +48,6 @@
 #include <mutex>
 #include <thread>
 #include <ctime>
-#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -53,8 +58,11 @@
 #include "drivers/mgraphic.h"
 #include "hires/gl_render.h"
 #include "hires/world_capture.h"
+#include "host/gamepad.h"
 #include "host/headtrack.h"
+#include "host/keyboard.h"
 #include "host/xr.h"
+#include "gamepad_cfg.h"
 
 using namespace f19;
 
@@ -100,86 +108,6 @@ const uint32_t kTextPalette[16] = {
     0x000000, 0x0000AA, 0x00AA00, 0x00AAAA, 0xAA0000, 0xAA00AA, 0xAA5500, 0xAAAAAA,
     0x555555, 0x5555FF, 0x55FF55, 0x55FFFF, 0xFF5555, 0xFF55FF, 0xFFFF55, 0xFFFFFF,
 };
-
-// ------------------------------------------------------------ keyboard
-
-struct KeyCode { uint8_t scan, ascii, shift_ascii; };
-
-// SDL scancode -> PC set-1 scan code and ASCII (unshifted / shifted).
-bool map_key(SDL_Scancode sc, KeyCode& k) {
-    static const struct { SDL_Scancode sdl; KeyCode k; } table[] = {
-        {SDL_SCANCODE_ESCAPE, {0x01, 0x1B, 0x1B}}, {SDL_SCANCODE_1, {0x02, '1', '!'}}, {SDL_SCANCODE_2, {0x03, '2', '@'}},
-        {SDL_SCANCODE_3, {0x04, '3', '#'}}, {SDL_SCANCODE_4, {0x05, '4', '$'}}, {SDL_SCANCODE_5, {0x06, '5', '%'}},
-        {SDL_SCANCODE_6, {0x07, '6', '^'}}, {SDL_SCANCODE_7, {0x08, '7', '&'}}, {SDL_SCANCODE_8, {0x09, '8', '*'}},
-        {SDL_SCANCODE_9, {0x0A, '9', '('}}, {SDL_SCANCODE_0, {0x0B, '0', ')'}}, {SDL_SCANCODE_MINUS, {0x0C, '-', '_'}},
-        {SDL_SCANCODE_EQUALS, {0x0D, '=', '+'}}, {SDL_SCANCODE_BACKSPACE, {0x0E, 0x08, 0x08}}, {SDL_SCANCODE_TAB, {0x0F, 0x09, 0x00}},
-        {SDL_SCANCODE_Q, {0x10, 'q', 'Q'}}, {SDL_SCANCODE_W, {0x11, 'w', 'W'}}, {SDL_SCANCODE_E, {0x12, 'e', 'E'}},
-        {SDL_SCANCODE_R, {0x13, 'r', 'R'}}, {SDL_SCANCODE_T, {0x14, 't', 'T'}}, {SDL_SCANCODE_Y, {0x15, 'y', 'Y'}},
-        {SDL_SCANCODE_U, {0x16, 'u', 'U'}}, {SDL_SCANCODE_I, {0x17, 'i', 'I'}}, {SDL_SCANCODE_O, {0x18, 'o', 'O'}},
-        {SDL_SCANCODE_P, {0x19, 'p', 'P'}}, {SDL_SCANCODE_LEFTBRACKET, {0x1A, '[', '{'}}, {SDL_SCANCODE_RIGHTBRACKET, {0x1B, ']', '}'}},
-        {SDL_SCANCODE_RETURN, {0x1C, 0x0D, 0x0D}}, {SDL_SCANCODE_A, {0x1E, 'a', 'A'}}, {SDL_SCANCODE_S, {0x1F, 's', 'S'}},
-        {SDL_SCANCODE_D, {0x20, 'd', 'D'}}, {SDL_SCANCODE_F, {0x21, 'f', 'F'}}, {SDL_SCANCODE_G, {0x22, 'g', 'G'}},
-        {SDL_SCANCODE_H, {0x23, 'h', 'H'}}, {SDL_SCANCODE_J, {0x24, 'j', 'J'}}, {SDL_SCANCODE_K, {0x25, 'k', 'K'}},
-        {SDL_SCANCODE_L, {0x26, 'l', 'L'}}, {SDL_SCANCODE_SEMICOLON, {0x27, ';', ':'}}, {SDL_SCANCODE_APOSTROPHE, {0x28, '\'', '"'}},
-        {SDL_SCANCODE_GRAVE, {0x29, '`', '~'}}, {SDL_SCANCODE_BACKSLASH, {0x2B, '\\', '|'}}, {SDL_SCANCODE_Z, {0x2C, 'z', 'Z'}},
-        {SDL_SCANCODE_X, {0x2D, 'x', 'X'}}, {SDL_SCANCODE_C, {0x2E, 'c', 'C'}}, {SDL_SCANCODE_V, {0x2F, 'v', 'V'}},
-        {SDL_SCANCODE_B, {0x30, 'b', 'B'}}, {SDL_SCANCODE_N, {0x31, 'n', 'N'}}, {SDL_SCANCODE_M, {0x32, 'm', 'M'}},
-        {SDL_SCANCODE_COMMA, {0x33, ',', '<'}}, {SDL_SCANCODE_PERIOD, {0x34, '.', '>'}}, {SDL_SCANCODE_SLASH, {0x35, '/', '?'}},
-        {SDL_SCANCODE_KP_MULTIPLY, {0x37, '*', '*'}}, {SDL_SCANCODE_SPACE, {0x39, ' ', ' '}},
-        {SDL_SCANCODE_F1, {0x3B, 0, 0}}, {SDL_SCANCODE_F2, {0x3C, 0, 0}}, {SDL_SCANCODE_F3, {0x3D, 0, 0}},
-        {SDL_SCANCODE_F4, {0x3E, 0, 0}}, {SDL_SCANCODE_F5, {0x3F, 0, 0}}, {SDL_SCANCODE_F6, {0x40, 0, 0}},
-        {SDL_SCANCODE_F7, {0x41, 0, 0}}, {SDL_SCANCODE_F8, {0x42, 0, 0}}, {SDL_SCANCODE_F9, {0x43, 0, 0}},
-        {SDL_SCANCODE_F10, {0x44, 0, 0}},
-        // Keypad with NumLock off: cursor codes, as F-19 expects for flying.
-        {SDL_SCANCODE_KP_7, {0x47, 0, 0}}, {SDL_SCANCODE_KP_8, {0x48, 0, 0}}, {SDL_SCANCODE_KP_9, {0x49, 0, 0}},
-        {SDL_SCANCODE_KP_MINUS, {0x4A, '-', '-'}}, {SDL_SCANCODE_KP_4, {0x4B, 0, 0}}, {SDL_SCANCODE_KP_5, {0x4C, 0, 0}},
-        {SDL_SCANCODE_KP_6, {0x4D, 0, 0}}, {SDL_SCANCODE_KP_PLUS, {0x4E, '+', '+'}}, {SDL_SCANCODE_KP_1, {0x4F, 0, 0}},
-        {SDL_SCANCODE_KP_2, {0x50, 0, 0}}, {SDL_SCANCODE_KP_3, {0x51, 0, 0}}, {SDL_SCANCODE_KP_0, {0x52, 0, 0}},
-        {SDL_SCANCODE_KP_PERIOD, {0x53, 0, 0}}, {SDL_SCANCODE_KP_ENTER, {0x1C, 0x0D, 0x0D}},
-        {SDL_SCANCODE_KP_DIVIDE, {0x35, '/', '/'}},
-        // Cursor keys and friends (no ASCII).
-        {SDL_SCANCODE_HOME, {0x47, 0, 0}}, {SDL_SCANCODE_UP, {0x48, 0, 0}}, {SDL_SCANCODE_PAGEUP, {0x49, 0, 0}},
-        {SDL_SCANCODE_LEFT, {0x4B, 0, 0}}, {SDL_SCANCODE_RIGHT, {0x4D, 0, 0}}, {SDL_SCANCODE_END, {0x4F, 0, 0}},
-        {SDL_SCANCODE_DOWN, {0x50, 0, 0}}, {SDL_SCANCODE_PAGEDOWN, {0x51, 0, 0}}, {SDL_SCANCODE_INSERT, {0x52, 0, 0}},
-        {SDL_SCANCODE_DELETE, {0x53, 0, 0}},
-    };
-    for (auto& e : table)
-        if (e.sdl == sc) { k = e.k; return true; }
-    return false;
-}
-
-// Keys a 101-key keyboard sends with an E0 prefix.
-bool is_extended(SDL_Scancode sc) {
-    switch (sc) {
-        case SDL_SCANCODE_UP: case SDL_SCANCODE_DOWN: case SDL_SCANCODE_LEFT: case SDL_SCANCODE_RIGHT:
-        case SDL_SCANCODE_HOME: case SDL_SCANCODE_END: case SDL_SCANCODE_PAGEUP: case SDL_SCANCODE_PAGEDOWN:
-        case SDL_SCANCODE_INSERT: case SDL_SCANCODE_DELETE: case SDL_SCANCODE_KP_ENTER: case SDL_SCANCODE_KP_DIVIDE:
-        case SDL_SCANCODE_RCTRL: case SDL_SCANCODE_RALT:
-            return true;
-        default:
-            return false;
-    }
-}
-
-uint8_t modifier_scan(SDL_Scancode sc) {
-    switch (sc) {
-        case SDL_SCANCODE_LSHIFT: return 0x2A;
-        case SDL_SCANCODE_RSHIFT: return 0x36;
-        case SDL_SCANCODE_LCTRL: case SDL_SCANCODE_RCTRL: return 0x1D;
-        case SDL_SCANCODE_LALT: case SDL_SCANCODE_RALT: return 0x38;
-        default: return 0;
-    }
-}
-
-// BIOS extended codes for function keys with modifiers.
-uint8_t fkey_scan(uint8_t scan, bool shift, bool ctrl, bool alt) {
-    if (scan < 0x3B || scan > 0x44) return scan;
-    int n = scan - 0x3B;
-    if (alt) return uint8_t(0x68 + n);
-    if (ctrl) return uint8_t(0x5E + n);
-    if (shift) return uint8_t(0x54 + n);
-    return scan;
-}
 
 void save_bmp(const std::string& path, const uint8_t* rgb, int w, int h) {
     SDL_Surface* s = SDL_CreateSurfaceFrom(w, h, SDL_PIXELFORMAT_RGB24, const_cast<uint8_t*>(rgb), w * 3);
@@ -233,6 +161,7 @@ int main(int argc, char** argv) {
     bool trace = false, original_driver = false, verify_driver = false, lowres = false, no_depth = false;
     float lod_detail = 1.0f;
     int terrain_radius = 6;
+    std::string gamepad_cfg;
     for (int i = 1; i < argc; i++) {
         if (!std::strcmp(argv[i], "--scale") && i + 1 < argc) scale = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--mips") && i + 1 < argc) mips = std::atof(argv[++i]);
@@ -250,6 +179,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--terrain-radius") && i + 1 < argc) terrain_radius = std::max(1, std::atoi(argv[++i]));
         else if (!std::strcmp(argv[i], "--vr")) vr = true;
         else if (!std::strcmp(argv[i], "--vr-scale") && i + 1 < argc) vr_scale = float(std::atof(argv[++i]));
+        else if (!std::strcmp(argv[i], "--gamepad") && i + 1 < argc) gamepad_cfg = argv[++i];
         else dir = argv[i];
     }
 
@@ -284,7 +214,9 @@ int main(int argc, char** argv) {
     // the D3D12 bridge when it is available (overridable).
     if (!std::getenv("GALLIUM_DRIVER") && SDL_GetPathInfo("/usr/lib/wsl/lib/libd3d12.so", nullptr))
         setenv("GALLIUM_DRIVER", "d3d12", 0);
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
+    // Gamepad input keeps working while the window is unfocused (in VR).
+    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 1;
     }
@@ -316,6 +248,30 @@ int main(int argc, char** argv) {
     bool want_screenshot = false;
     bool cockpit3d = !flat_cockpit, looking = false;
     float head_yaw = 0, head_pitch = 0;  // mouse look
+    Gamepad gamepad;
+    {
+        std::string path = gamepad_cfg, text = kDefaultGamepadCfg, source = "built-in gamepad.cfg";
+        if (path.empty()) {
+            const char* xdg = std::getenv("XDG_CONFIG_HOME");
+            const char* home = std::getenv("HOME");
+            std::string user = xdg && *xdg ? std::string(xdg) + "/f19/gamepad.cfg"
+                             : home ? std::string(home) + "/.config/f19/gamepad.cfg" : "";
+            if (!user.empty() && SDL_GetPathInfo(user.c_str(), nullptr)) path = user;
+        }
+        if (!path.empty()) {
+            size_t size = 0;
+            void* data = SDL_LoadFile(path.c_str(), &size);
+            if (!data) {
+                std::fprintf(stderr, "cannot read %s: %s\n", path.c_str(), SDL_GetError());
+                return 1;
+            }
+            text.assign(static_cast<const char*>(data), size);
+            SDL_free(data);
+            source = path;
+            std::fprintf(stderr, "gamepad bindings: %s\n", path.c_str());
+        }
+        gamepad.load(text, source);
+    }
     HeadPose shown_head;
     HeadTracker tracker;
     if (headtrack_port > 0) {
@@ -339,6 +295,10 @@ int main(int argc, char** argv) {
     // of about 1 ms of emulated time; the main thread handles input and
     // renders snapshots. `mtx` guards the machine.
     std::mutex mtx;
+    gamepad.send_key = [&](SDL_Scancode sc, SDL_Keymod mod, bool down) {
+        std::lock_guard<std::mutex> lk(mtx);
+        send_key(m, sc, mod, down);
+    };
     std::atomic<bool> quit{false};
     std::atomic<uint64_t> perf_drops{0}, perf_busy_ns{0};
     bool perf = std::getenv("F19_PERF") != nullptr;
@@ -420,28 +380,10 @@ int main(int argc, char** argv) {
                 head_yaw = std::clamp(head_yaw + std::clamp(ev.motion.xrel, -50.0f, 50.0f) * 0.004f, -2.6f, 2.6f);
                 head_pitch = std::clamp(head_pitch + std::clamp(ev.motion.yrel, -50.0f, 50.0f) * 0.004f, -1.2f, 1.3f);
             }
+            gamepad.handle_event(ev);
             if (ev.type == SDL_EVENT_KEY_DOWN || ev.type == SDL_EVENT_KEY_UP) {
-                // Raw make/break codes go through port 60h + IRQ1 so the
-                // game's own keyboard handler sees held keys; the BIOS
-                // handler buffers `bios` for menus and typed commands.
-                bool down = ev.type == SDL_EVENT_KEY_DOWN;
-                SDL_Scancode sc = ev.key.scancode;
-                uint8_t code = modifier_scan(sc);
-                uint16_t bios = 0;
-                KeyCode k;
-                if (!code) {
-                    if (!map_key(sc, k)) continue;
-                    code = k.scan;
-                    bool shift = ev.key.mod & SDL_KMOD_SHIFT, ctrl = ev.key.mod & SDL_KMOD_CTRL, alt = ev.key.mod & SDL_KMOD_ALT;
-                    uint8_t ascii = shift ? k.shift_ascii : k.ascii;
-                    uint8_t scan = fkey_scan(k.scan, shift, ctrl, alt);
-                    if (alt) ascii = 0;
-                    else if (ctrl && std::isalpha(ascii)) ascii = uint8_t(std::tolower(ascii) & 0x1F);
-                    bios = uint16_t(ascii | (scan << 8));
-                }
                 std::lock_guard<std::mutex> lk(mtx);
-                if (is_extended(sc)) m.key_event(0xE0, 0);
-                m.key_event(down ? code : uint8_t(code | 0x80), down ? bios : 0);
+                send_key(m, ev.key.scancode, ev.key.mod, ev.type == SDL_EVENT_KEY_DOWN);
             }
         }
 
@@ -475,10 +417,23 @@ int main(int argc, char** argv) {
             }
         }
 
-        // Head pose: tracker plus mouse look.
+        // Gamepad: joystick and keys into the machine.
+        MotionControllers vr_pads;
+        const bool vr_pads_on = xr_on && xr.controllers(vr_pads);
+        const Gamepad::State pad = gamepad.update(SDL_GetTicksNS(), vr_pads_on ? &vr_pads : nullptr);
+        {
+            std::lock_guard<std::mutex> lk(mtx);
+            m.joystick.connected = pad.connected;
+            m.joystick.x = pad.stick_x;
+            m.joystick.y = pad.stick_y;
+            m.joystick.button[0] = pad.button[0];
+            m.joystick.button[1] = pad.button[1];
+        }
+
+        // Head pose: tracker plus mouse look and the gamepad's look stick.
         HeadPose head = tracker.poll();
-        head.yaw = std::clamp(head.yaw + head_yaw, -2.6f, 2.6f);
-        head.pitch = std::clamp(head.pitch + head_pitch, -1.2f, 1.3f);
+        head.yaw = std::clamp(head.yaw + head_yaw + pad.look_x * 2.5f, -2.6f, 2.6f);
+        head.pitch = std::clamp(head.pitch + head_pitch + pad.look_y * 1.2f, -1.2f, 1.3f);
 
         // 4:3 letterbox in the window's pixels.
         int ow, oh;

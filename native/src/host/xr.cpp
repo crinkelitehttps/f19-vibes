@@ -1,6 +1,7 @@
 #include "host/xr.h"
 
 #include "hires/gl.h"
+#include "host/gamepad.h"
 
 #include <X11/Xlib.h>
 #include <GL/glx.h>
@@ -14,6 +15,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <vector>
 
 namespace f19 {
@@ -49,7 +51,7 @@ struct XrOutput::Impl {
     XrInstance instance = XR_NULL_HANDLE;
     XrSystemId system = XR_NULL_SYSTEM_ID;
     XrSession session = XR_NULL_HANDLE;
-    bool running = false, lost = false;
+    bool running = false, lost = false, focused = false;
     // base: the runtime's LOCAL space; play: LOCAL moved to the recentred
     // eye point (yaw only), which all rendering uses.
     XrSpace base_space = XR_NULL_HANDLE, play_space = XR_NULL_HANDLE, view_space = XR_NULL_HANDLE;
@@ -61,12 +63,69 @@ struct XrOutput::Impl {
     bool position_rejected = false;
     bool log = std::getenv("F19_XR_LOG") != nullptr;  // print the eye pose twice a second
     XrTime last_log = 0;
+    // Motion controller actions; each has both hands as subaction paths.
+    XrActionSet action_set = XR_NULL_HANDLE;
+    XrPath hands[2] = {XR_NULL_PATH, XR_NULL_PATH};
+    XrAction trigger = XR_NULL_HANDLE, squeeze = XR_NULL_HANDLE, menu = XR_NULL_HANDLE, stick = XR_NULL_HANDLE,
+             stick_click = XR_NULL_HANDLE, pad = XR_NULL_HANDLE, pad_click = XR_NULL_HANDLE, pad_touch = XR_NULL_HANDLE;
+    bool controllers_announced[2] = {};
 
     bool make_swapchain(Swapchain& sc, int64_t format, int w, int h);
     bool make_play_space(const XrPosef& pose);
     void try_recenter(XrTime t);
     GLuint acquire(Swapchain& sc);
+    bool make_actions();
 };
+
+bool XrOutput::Impl::make_actions() {
+    XrActionSetCreateInfo asi{XR_TYPE_ACTION_SET_CREATE_INFO};
+    std::strcpy(asi.actionSetName, "flight");
+    std::strcpy(asi.localizedActionSetName, "Flight");
+    if (!check(instance, xrCreateActionSet(instance, &asi, &action_set), "xrCreateActionSet")) return false;
+    xrStringToPath(instance, "/user/hand/left", &hands[0]);
+    xrStringToPath(instance, "/user/hand/right", &hands[1]);
+    auto make = [&](XrAction& a, const char* name, const char* label, XrActionType type) {
+        XrActionCreateInfo ai{XR_TYPE_ACTION_CREATE_INFO};
+        std::strcpy(ai.actionName, name);
+        std::strcpy(ai.localizedActionName, label);
+        ai.actionType = type;
+        ai.countSubactionPaths = 2;
+        ai.subactionPaths = hands;
+        return check(instance, xrCreateAction(action_set, &ai, &a), "xrCreateAction");
+    };
+    if (!make(trigger, "trigger", "Trigger", XR_ACTION_TYPE_FLOAT_INPUT) ||
+        !make(squeeze, "squeeze", "Grip", XR_ACTION_TYPE_BOOLEAN_INPUT) ||
+        !make(menu, "menu", "Menu", XR_ACTION_TYPE_BOOLEAN_INPUT) ||
+        !make(stick, "thumbstick", "Thumbstick", XR_ACTION_TYPE_VECTOR2F_INPUT) ||
+        !make(stick_click, "thumbstick_click", "Thumbstick click", XR_ACTION_TYPE_BOOLEAN_INPUT) ||
+        !make(pad, "trackpad", "Trackpad", XR_ACTION_TYPE_VECTOR2F_INPUT) ||
+        !make(pad_click, "trackpad_click", "Trackpad click", XR_ACTION_TYPE_BOOLEAN_INPUT) ||
+        !make(pad_touch, "trackpad_touch", "Trackpad touch", XR_ACTION_TYPE_BOOLEAN_INPUT))
+        return false;
+
+    const struct { XrAction action; const char* input; } inputs[] = {
+        {trigger, "trigger/value"}, {squeeze, "squeeze/click"}, {menu, "menu/click"}, {stick, "thumbstick"},
+        {stick_click, "thumbstick/click"}, {pad, "trackpad"}, {pad_click, "trackpad/click"}, {pad_touch, "trackpad/touch"},
+    };
+    std::vector<XrActionSuggestedBinding> sb;
+    for (const char* hand : {"left", "right"})
+        for (auto& in : inputs) {
+            XrPath path;
+            std::string s = std::string("/user/hand/") + hand + "/input/" + in.input;
+            xrStringToPath(instance, s.c_str(), &path);
+            sb.push_back({in.action, path});
+        }
+    XrInteractionProfileSuggestedBinding isb{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
+    xrStringToPath(instance, "/interaction_profiles/microsoft/motion_controller", &isb.interactionProfile);
+    isb.countSuggestedBindings = uint32_t(sb.size());
+    isb.suggestedBindings = sb.data();
+    if (!check(instance, xrSuggestInteractionProfileBindings(instance, &isb), "xrSuggestInteractionProfileBindings")) return false;
+
+    XrSessionActionSetsAttachInfo at{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO};
+    at.countActionSets = 1;
+    at.actionSets = &action_set;
+    return check(instance, xrAttachSessionActionSets(session, &at), "xrAttachSessionActionSets");
+}
 
 bool XrOutput::Impl::make_swapchain(Swapchain& sc, int64_t format, int w, int h) {
     XrSwapchainCreateInfo ci{XR_TYPE_SWAPCHAIN_CREATE_INFO};
@@ -145,6 +204,7 @@ XrOutput::~XrOutput() {
         if (sc->handle) xrDestroySwapchain(sc->handle);
     for (XrSpace s : {d.play_space, d.base_space, d.view_space})
         if (s) xrDestroySpace(s);
+    if (d.action_set) xrDestroyActionSet(d.action_set);
     if (d.session) xrDestroySession(d.session);
     if (d.instance) xrDestroyInstance(d.instance);
 }
@@ -208,6 +268,7 @@ bool XrOutput::init(float resolution_scale) {
     rs.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW;
     if (!check(d.instance, xrCreateReferenceSpace(d.session, &rs, &d.view_space), "xrCreateReferenceSpace")) return false;
     if (!d.make_play_space(rs.poseInReferenceSpace)) return false;
+    if (!d.make_actions()) std::fprintf(stderr, "openxr: motion controllers unavailable\n");
 
     uint32_t nv = 0;
     xrEnumerateViewConfigurationViews(d.instance, d.system, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 0, &nv, nullptr);
@@ -258,6 +319,8 @@ bool XrOutput::poll() {
                     d.recenter_pending = true;
                     std::fprintf(stderr, "openxr: session running (Shift+F12 recentres)\n");
                 }
+            } else if (e.state == XR_SESSION_STATE_FOCUSED || e.state == XR_SESSION_STATE_VISIBLE) {
+                d.focused = e.state == XR_SESSION_STATE_FOCUSED;
             } else if (e.state == XR_SESSION_STATE_STOPPING) {
                 xrEndSession(d.session);
                 d.running = false;
@@ -417,6 +480,56 @@ void XrOutput::end_frame() {
     ei.layerCount = count;
     ei.layers = layers;
     check(d.instance, xrEndFrame(d.session, &ei), "xrEndFrame");
+}
+
+bool XrOutput::controllers(MotionControllers& out) {
+    auto& d = *p_;
+    out = {};
+    if (!d.action_set || !d.running || !d.focused) return false;
+    XrActiveActionSet active{d.action_set, XR_NULL_PATH};
+    XrActionsSyncInfo si{XR_TYPE_ACTIONS_SYNC_INFO};
+    si.countActiveActionSets = 1;
+    si.activeActionSets = &active;
+    if (!XR_SUCCEEDED(xrSyncActions(d.session, &si))) return false;
+    for (int h = 0; h < 2; h++) {
+        XrActionStateGetInfo gi{XR_TYPE_ACTION_STATE_GET_INFO};
+        gi.subactionPath = d.hands[h];
+        auto get_bool = [&](XrAction a, bool& v) {
+            gi.action = a;
+            XrActionStateBoolean st{XR_TYPE_ACTION_STATE_BOOLEAN};
+            if (XR_SUCCEEDED(xrGetActionStateBoolean(d.session, &gi, &st)) && st.isActive) {
+                v = st.currentState;
+                out.active[h] = true;
+            }
+        };
+        auto get_vec = [&](XrAction a, float* v) {
+            gi.action = a;
+            XrActionStateVector2f st{XR_TYPE_ACTION_STATE_VECTOR2F};
+            if (XR_SUCCEEDED(xrGetActionStateVector2f(d.session, &gi, &st)) && st.isActive) {
+                v[0] = st.currentState.x;
+                v[1] = -st.currentState.y;  // OpenXR: up +
+                out.active[h] = true;
+            }
+        };
+        gi.action = d.trigger;
+        XrActionStateFloat tr{XR_TYPE_ACTION_STATE_FLOAT};
+        if (XR_SUCCEEDED(xrGetActionStateFloat(d.session, &gi, &tr)) && tr.isActive) {
+            out.trigger[h] = tr.currentState;
+            out.active[h] = true;
+        }
+        get_bool(d.squeeze, out.squeeze[h]);
+        get_bool(d.menu, out.menu[h]);
+        get_vec(d.stick, out.stick[h]);
+        get_bool(d.stick_click, out.stick_click[h]);
+        get_vec(d.pad, out.pad[h]);
+        get_bool(d.pad_click, out.pad_click[h]);
+        get_bool(d.pad_touch, out.pad_touch[h]);
+        if (out.active[h] != d.controllers_announced[h]) {
+            std::fprintf(stderr, "openxr: %s controller %s\n", h ? "right" : "left", out.active[h] ? "active" : "inactive");
+            d.controllers_announced[h] = out.active[h];
+        }
+    }
+    return out.active[0] || out.active[1];
 }
 
 void XrOutput::recenter() { p_->recenter_pending = true; }

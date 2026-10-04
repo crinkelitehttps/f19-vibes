@@ -11,6 +11,8 @@
 //       or: draw into xr.acquire_screen(), xr.release_screen()
 //   }
 //   xr.end_frame();                   // after every begin_frame()
+//
+// Motion controllers (WMR profile) are read as actions: controllers().
 #pragma once
 
 #include <cstdint>
@@ -19,6 +21,8 @@
 #include "hires/gl_render.h"
 
 namespace f19 {
+
+struct MotionControllers;
 
 class XrOutput {
 public:
@@ -47,6 +51,9 @@ public:
     void release_screen();
     // Submit what was rendered this frame (the eyes or the screen).
     void end_frame();
+    // Read the motion controllers' buttons and axes (all released while the
+    // session isn't focused). Returns whether either controller is active.
+    bool controllers(MotionControllers& out);
     // Make the current head position and heading the neutral eye point.
     void recenter();
 

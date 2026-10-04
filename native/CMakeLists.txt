@@ -41,7 +41,13 @@ find_package(Threads REQUIRED)
 find_package(OpenXR REQUIRED CONFIG)
 find_package(OpenGL REQUIRED COMPONENTS GLX)
 find_package(X11 REQUIRED)
-add_executable(f19 src/host/f19.cpp src/host/headtrack.cpp src/host/xr.cpp)
+# Default gamepad bindings, built in from native/gamepad.cfg.
+file(READ gamepad.cfg F19_GAMEPAD_CFG)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS gamepad.cfg)
+file(CONFIGURE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/generated/gamepad_cfg.h
+     CONTENT "// Generated from native/gamepad.cfg.\n#pragma once\ninline constexpr const char* kDefaultGamepadCfg = R\"cfg(${F19_GAMEPAD_CFG})cfg\";\n")
+add_executable(f19 src/host/f19.cpp src/host/headtrack.cpp src/host/xr.cpp src/host/keyboard.cpp src/host/gamepad.cpp)
+target_include_directories(f19 PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_link_libraries(f19 PRIVATE f19core f19hires ZLIB::ZLIB Threads::Threads OpenXR::openxr_loader OpenGL::GLX X11::X11)
 # OpenXR structs are initialised as {XR_TYPE_...}, the rest zeroed.
 set_source_files_properties(src/host/xr.cpp PROPERTIES COMPILE_OPTIONS -Wno-missing-field-initializers)

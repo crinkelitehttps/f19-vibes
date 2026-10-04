@@ -133,11 +133,35 @@ the two eyes' images.
   per-frame wait / render / submit times; `F19_XR_LOG=1` prints the eye
   pose twice a second.
 
+## Motion controllers
+
+The AH101's original WMR controllers pair with the laptop over Bluetooth
+("Motion controller - Left/Right"; hold the pairing button under the
+battery cover). Monado's WMR driver talks to them; switch them on before
+starting Monado. Monado main since b0b1d8b1b ("drivers: fix dead stores",
+2026-08) rejects every Bluetooth WMR controller ("Failed to get WMR
+Bluetooth controller string descriptor": `wmr_create_bt_controller`
+checks `ret != 0`, but the prober returns the string's length); the local
+AUR build carries a one-line patch (`ret <= 0`). With it, the right
+controller was confirmed live through OpenXR (2026-10-04). Mainline Monado tracks them by IMU only (no optical
+constellation tracking), so f19 uses only their buttons and axes.
+
+`xr.cpp` creates one action set ("flight") with trigger, grip, menu,
+thumbstick (+click) and trackpad (+click, +touch) actions, both hands as
+subaction paths, suggested for `/interaction_profiles/microsoft/motion_controller`,
+and syncs them each frame while the session is focused
+(`XrOutput::controllers`). The state goes through the gamepad bindings
+(`native/gamepad.cfg`, `left-`/`right-` controls): by default the right
+thumbstick is the joystick, right trigger / grip are fire buttons 1 / 2,
+the left thumbstick's y is the throttle, and the trackpads are four-way
+pads with a centre click for weapons, defences and flight controls.
+
 ## Not done
 
 - External views in VR: their 2D overlay is drawn in screen space per eye,
   so it is head-locked (should be a quad in the world like the HUD).
-- 90 Hz (the runtime chose 60 Hz here), motion controllers, a
+- 90 Hz (the runtime chose 60 Hz here), controller poses (pointing,
+  grabbing a stick), a
   Windows/WGL binding, Wayland/EGL binding.
 - World scale (feet assumed) and cockpit scale never checked in a working
   headset.

@@ -1,5 +1,6 @@
 #include "core/machine.h"
 
+#include <algorithm>
 #include <cstdarg>
 #include <cstdio>
 #include <ctime>
@@ -489,9 +490,19 @@ void Machine::setup_ports() {
         if (++dac_read_phase_ == 3) { dac_read_phase_ = 0; dac_read_index_++; }
         return v;
     };
-    // Joystick: no joystick (one-shots never time out, buttons released).
-    port_in[0x201] = []() -> uint8_t { return 0xFF; };
-    port_out[0x201] = [](uint8_t) {};
+    // Joystick: a write fires the axis one-shots; each axis bit stays set
+    // for 24 us + 0..1.1 ms with the stick's position (100k pot), timed in
+    // emulated instructions. The game counts loop passes until the bits
+    // clear and calibrates itself. Buttons (bits 4, 5) are active low.
+    // Without a joystick the one-shots never time out.
+    port_in[0x201] = [this]() -> uint8_t {
+        if (!joystick.connected) return 0xFF;
+        uint64_t elapsed_us = (cpu.instructions - joy_fired_) * 1000 / ips_per_ms;
+        auto active = [&](float v) { return elapsed_us < uint64_t(24 + 550 * (1 + std::clamp(v, -1.0f, 1.0f))); };
+        return uint8_t(0xCC | (active(joystick.x) ? 1 : 0) | (active(joystick.y) ? 2 : 0) |
+                       (joystick.button[0] ? 0 : 0x10) | (joystick.button[1] ? 0 : 0x20));
+    };
+    port_out[0x201] = [this](uint8_t) { joy_fired_ = cpu.instructions; };
 }
 
 uint16_t Machine::pit_count() const {

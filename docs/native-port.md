@@ -277,6 +277,25 @@ headset (rotation-only tracking, per-eye display offsets); Basalt 6DOF
 diverges on it. Setup,
 findings, implementation and options: [vr.md](vr.md).
 
+Joystick / gamepad (`native/src/host/gamepad.cpp`, port 201h in
+`machine.cpp`): the game reads the PC game port itself. EGAME
+(`EGAME.EXE` file offset 0x12E85) writes 201h, then counts passes of a
+10-instruction loop until axis bits 0/1 clear (CX = 0, so 65536 passes
+means no joystick: 0xFFFF), and calibrates itself: the centre is captured
+once, the minimum/maximum widen as they are seen, so each direction reads
+full scale after it has been reached once. Buttons come from MISC's
+`in al,201h` (bit 4 + n, active low). SU asks "Do you have a joystick
+(Y/N)" and calibrates with fire button 1. The emulated port times each
+axis as 24 us + 0..1.1 ms (a 100 kOhm pot) in emulated instructions, so
+the counts don't depend on host speed; it reads as empty while no
+controller is connected. An SDL gamepad drives it through bindings in
+`native/gamepad.cfg` (built in; `~/.config/f19/gamepad.cfg` or
+`--gamepad FILE` override): stick axes, the two fire buttons, look-around
+(right stick, springs back), and keys with modifiers (held = typematic
+repeat after 500 ms at 20/s). In VR the WMR motion controllers feed the
+same bindings (`left-`/`right-` controls; see [vr.md](vr.md)). Which game functions the two fire buttons
+trigger is not yet traced.
+
 View keys (from the key handler): F1 cockpit; Shift+F1..F6 external views
 (view variable `[9422]` = 87h, 84h, 85h, 89h, 88h, 8Bh). EGAME's INT 9 handler
 dedupes the BIOS key buffer using the AT BIOS bounds at 0040:0080/0082,
@@ -308,7 +327,8 @@ Working:
   as a 3D scene (panel as a tilted textured quad, HUD upright above it); widescreen
   external views; F11 toggles 3D/flat; right-drag mouse look; OpenTrack
   UDP head tracking (6DOF; confirmed live with OpenTrack and the laptop
-  webcam); F12
+  webcam); gamepad as the PC joystick plus key bindings (gamepad.cfg; game
+  port loop checked headless, not yet flown with a real controller); F12
   screenshots (+ engine frame + primitive dump); F19_PERF=1 timing.
 - Headless checks: `build/native/f19trace out/run/demo_native -n 380 -k n1 -H x.ppm`
   (demo flies itself; writes hi-res, world-only, page, mask, 3D renders;
