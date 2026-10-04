@@ -492,6 +492,13 @@ M3 transpose(const M3& a) {
         for (int j = 0; j < 3; j++) t.m[i][j] = a.m[j][i];
     return t;
 }
+// The first primitive of the main view (the full-width viewport at the page
+// origin), or null: its projection state is the engine's camera.
+const HiresPrim* main_view_prim(const HiresFrame& f) {
+    for (auto& p : f.prims)
+        if (p.proj.ox == 0 && p.proj.oy == 0 && p.proj.vp_w >= 320) return &p;
+    return nullptr;
+}
 }  // namespace
 
 bool GlRenderer::render_cockpit3d(const HiresFrame& f, int w, int h, const HeadPose& head, GLuint* out) {
@@ -508,6 +515,13 @@ bool GlRenderer::render_cockpit3d(const HiresFrame& f, int w, int h, const HeadP
     eye.tan_right = tan_h;
     eye.tan_down = -tan_v;
     eye.tan_up = tan_v;
+    // Cockpit view: frame it as the original screen, the engine's
+    // projection centre (the HUD crosshair) above the window centre, so the
+    // HUD and the panel below it are both in view.
+    if (const HiresPrim* m = main_view_prim(f); m && m->proj.vp_h < 200) {
+        eye.tan_up = std::clamp(m->proj.cy / 192.0f, 0.0f, 2 * tan_v);
+        eye.tan_down = eye.tan_up - 2 * tan_v;
+    }
     *out = render_view(f, w, h, eye, 0);
     return true;
 }
@@ -515,14 +529,9 @@ bool GlRenderer::render_cockpit3d(const HiresFrame& f, int w, int h, const HeadP
 GLuint GlRenderer::render_view(const HiresFrame& f, int w, int h, const EyeView& eye, GLuint dst) {
     // The main view is the full-width viewport at the page origin; in the
     // cockpit view it stops above the instrument panel.
-    const HiresPrim* hor = nullptr;
-    float vp_h = 200;
-    for (auto& p : f.prims)
-        if (p.proj.ox == 0 && p.proj.oy == 0 && p.proj.vp_w >= 320) {
-            vp_h = p.proj.vp_h;
-            if (p.kind == HiresPrim::Horizon) hor = &p;
-            break;
-        }
+    const HiresPrim* main = main_view_prim(f);
+    const HiresPrim* hor = main && main->kind == HiresPrim::Horizon ? main : nullptr;
+    const float vp_h = main ? main->proj.vp_h : 200;
     const bool external = vp_h >= 200;  // external views: no panel; 2D layer centred 4:3
 
     ensure_framebuffers(w, h);
@@ -683,13 +692,16 @@ GLuint GlRenderer::render_view(const HiresFrame& f, int w, int h, const EyeView&
         float P[16] = {sx, 0, 0, 0, 0, sy, 0, 0, ox, oy, (fa + n) / (fa - n), 1, 0, 0, -2 * fa * n / (fa - n), 0};
         float R[16] = {V.m[0][0], V.m[1][0], V.m[2][0], 0, V.m[0][1], V.m[1][1], V.m[2][1], 0,
                        V.m[0][2], V.m[1][2], V.m[2][2], 0, tv[0], tv[1], tv[2], 1};
+        auto mul4 = [](const float* a, const float* b, float* r) {  // column-major r = a b
+            for (int col = 0; col < 4; col++)
+                for (int row = 0; row < 4; row++) {
+                    float acc = 0;
+                    for (int k = 0; k < 4; k++) acc += a[k * 4 + row] * b[col * 4 + k];
+                    r[col * 4 + row] = acc;
+                }
+        };
         float mvp[16];
-        for (int col = 0; col < 4; col++)
-            for (int row = 0; row < 4; row++) {
-                float acc = 0;
-                for (int k = 0; k < 4; k++) acc += P[k * 4 + row] * R[col * 4 + k];
-                mvp[col * 4 + row] = acc;
-            }
+        mul4(P, R, mvp);
         UseProgram(panel_prog_);
         UniformMatrix4fv(panel_mvp_loc_, 1, GL_FALSE, mvp);
         Uniform1i(panel_tex_loc_, 0);
@@ -706,22 +718,36 @@ GLuint GlRenderer::render_view(const HiresFrame& f, int w, int h, const EyeView&
             DrawArrays(GL_TRIANGLES, 0, 6);
         };
 
-        // HUD first (it is further away): face-on, the crosshair (page
-        // hud_cross) on the aircraft's forward axis at hud_distance.
+        // HUD first (the panel may cover its lower edge). Collimated, as
+        // a real HUD: drawn at infinity (rotation only, no eye offset), so
+        // both eyes see it in the same direction as the distant world and
+        // head movement does not shift it. Each page pixel is placed in the
+        // direction the engine's projection gives it (x = cx + 256 X/Z,
+        // y = cy - 192 Y/Z), so the game's symbology (target boxes,
+        // gun cross, tracers) overlays the world where the engine aims it.
         if (draw_overlay) {
-            float x0 = hud_cols[0], x1 = hud_cols[1] + 1.0f, y1 = float(hud_rows);
-            float s = hud_width / (x1 - x0), sv = s * 1.2f;  // 4:3 pixel aspect
-            float hx0 = (x0 - hud_cross[0]) * s, hx1 = (x1 - hud_cross[0]) * s;
-            float hy0 = (hud_cross[1] - 0) * sv, hy1 = (hud_cross[1] - y1) * sv;
-            float z = hud_distance;
-            float q[4][5] = {{hx0, hy0, z, x0 / 320, 0},
-                             {hx1, hy0, z, x1 / 320, 0},
-                             {hx1, hy1, z, x1 / 320, y1 / 200},
-                             {hx0, hy1, z, x0 / 320, y1 / 200}};
+            float pcx = main ? main->proj.cx : hud_cross[0], pcy = main ? main->proj.cy : hud_cross[1];
+            float zd = main ? main->proj.zdiv : 1.0f;
+            // The viewport's last row is the panel's top bevel, not HUD
+            // (half a texel more, so filtering does not pull it in).
+            float x0 = hud_cols[0], x1 = hud_cols[1] + 1.0f, y1 = float(hud_rows) - 1.5f;
+            float hx0 = (x0 - pcx) * zd / 256.0f, hx1 = (x1 - pcx) * zd / 256.0f;
+            float hy0 = (pcy - 0) * zd / 192.0f, hy1 = (pcy - y1) * zd / 192.0f;
+            float q[4][5] = {{hx0, hy0, 1, x0 / 320, 0},
+                             {hx1, hy0, 1, x1 / 320, 0},
+                             {hx1, hy1, 1, x1 / 320, y1 / 200},
+                             {hx0, hy1, 1, x0 / 320, y1 / 200}};
+            float R0[16];
+            std::copy_n(R, 16, R0);
+            R0[12] = R0[13] = R0[14] = 0;
+            float mvp0[16];
+            mul4(P, R0, mvp0);
+            UniformMatrix4fv(panel_mvp_loc_, 1, GL_FALSE, mvp0);
             Enable(GL_BLEND);
             BlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
             draw_quad(q);
             Disable(GL_BLEND);
+            UniformMatrix4fv(panel_mvp_loc_, 1, GL_FALSE, mvp);
         }
 
         float rows = 200.0f - vp_h;

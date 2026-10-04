@@ -215,12 +215,19 @@ wider windows see more) rotated by a head orientation; sky and ground are
 shaded per pixel from the camera-space up vector, reconstructed from the
 horizon inputs as (-s·[9B2], c·[9B2], -[9B0]); the page rows below the
 viewport (instrument panel, live each frame incl. map and TrackCam) are a
-texture on a quad in the aircraft frame (centre (0, -0.29, 0.9), width 1,
-top tilted 25° away). The HUD (non-world pixels of the rows above the
-viewport, page columns 45-275 = the HUD frame) is an upright quad facing the
-seat, 0.6 wide, ahead of and above the panel, with its crosshair (page pixel
-159.5, 58.5) straight ahead at distance 1.25: the screen centre at neutral
-head pose. It is fixed to the cockpit, not conformal to the world.
+texture on a quad in the aircraft frame (centre (0, -0.43, 0.9), width 1,
+top tilted 25° away; its top edge just below the original viewport, ~15°
+down). The HUD (non-world pixels of the viewport rows, full width, minus
+the last row, which is the panel's top bevel) is collimated like a real
+HUD: drawn at infinity (rotation only, no eye offset, so no stereo
+parallax and no shift when leaning), each page pixel in the direction the
+engine's projection gives it (tan = (x − cx)/256, (cy − y)/192, times the
+zoom divisor). The game's symbology (target boxes, gun cross, tracers)
+therefore overlays the world where the engine aims it. The desktop cockpit
+view frames it as the original screen: the projection centre sits cy/192
+below the top edge (the vertical extent is unchanged), so the HUD and the
+panel are both in view. `f19trace -H` also writes `.eyeL`/`.eyeR` renders
+3.2 cm either side; the HUD must be identical in both.
 
 Native scene (`scene.cpp`, default in the 3D view; Shift+F11 switches to
 the captured primitives): the world is drawn from the game's shape and
@@ -324,7 +331,7 @@ Working:
   = display refresh).
 - High-res 3D world (MSAA, object depth): native scene in all directions
   (shapes and terrain from the game's data), engine capture as fallback; cockpit view
-  as a 3D scene (panel as a tilted textured quad, HUD upright above it); widescreen
+  as a 3D scene (panel as a tilted textured quad, HUD collimated at infinity above it); widescreen
   external views; F11 toggles 3D/flat; right-drag mouse look; OpenTrack
   UDP head tracking (6DOF; confirmed live with OpenTrack and the laptop
   webcam); gamepad as the PC joystick plus key bindings (gamepad.cfg; game

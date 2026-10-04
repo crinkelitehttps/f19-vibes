@@ -68,13 +68,14 @@ public:
     GLuint render_view(const HiresFrame& f, int w, int h, const EyeView& eye, GLuint dst);
     // Panel placement in the aircraft frame (eye at origin, x right, y up,
     // z forward; units arbitrary, only proportions matter).
-    float panel_width = 1.0f, panel_center[3] = {0.0f, -0.29f, 0.90f};
+    // Top edge just below the original 3D viewport (~15 degrees down), as
+    // on the original screen, so it does not hide the HUD's bottom rows.
+    float panel_width = 1.0f, panel_center[3] = {0.0f, -0.43f, 0.90f};
     float panel_tilt_deg = 25.0f;   // top edge leans away from the viewer
-    // HUD: page columns hud_cols (the HUD frame) of the rows above the 3D
-    // viewport on an upright quad facing the seat, hud_width wide, with the
-    // crosshair (page pixel hud_cross) straight ahead at hud_distance.
-    float hud_cols[2] = {45, 275}, hud_cross[2] = {159.5f, 58.5f};
-    float hud_width = 0.6f, hud_distance = 1.25f;
+    // HUD: the non-world pixels of page columns hud_cols in the rows of the
+    // 3D viewport, collimated (at infinity) at the engine's projection scale
+    // around its projection centre (hud_cross if the frame has none).
+    float hud_cols[2] = {0, 319}, hud_cross[2] = {159, 56};
     float hfov_4x3_deg = 64.0f;     // the original's horizontal field of view
     float panel_units_per_cm = 1.0f / 60.0f;  // head position scale (panel width ~60 cm)
     // Eye position also moves the eye in the world (parallax on nearby

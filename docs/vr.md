@@ -119,8 +119,9 @@ the two eyes' images.
   sky shader (principal point and separate focal lengths) and the panel/HUD
   matrix all take the off-centre frustum. `render_cockpit3d` (desktop)
   builds a symmetric `EyeView` from the head pose and calls it. Eye
-  position moves the eye relative to the panel and HUD quads (stereo
-  parallax on them) and in the world, assuming world units are feet
+  position moves the eye relative to the panel quad (stereo parallax on
+  it) and in the world; the HUD is collimated (at infinity, rotation
+  only), so it is single and sharp when focusing on distant targets, assuming world units are feet
   (`world_units_per_cm`, unverified). The scene build is cached per frame,
   so both eyes share it.
 - OpenXR → aircraft frame: OpenXR looks down -z, the aircraft frame has z

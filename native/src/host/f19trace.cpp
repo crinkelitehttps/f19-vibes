@@ -230,7 +230,7 @@ int main(int argc, char** argv) {
                                                 Shot{".cockpit3d-look.ppm", HeadPose{0.35f, -0.15f}, true},
                                                 Shot{".cockpit3d-left.ppm", HeadPose{-1.4f, -0.1f}, true},
                                                 Shot{".cockpit3d-behind.ppm", HeadPose{2.6f, 0.1f}, true},
-                                                Shot{".cockpit3d-lean.ppm", HeadPose{0.2f, -0.3f, 0.25f, 8, 0, -15}, true}}) {
+                                                Shot{".cockpit3d-lean.ppm", HeadPose{0.2f, -0.3f, 0.25f, 8, 0, -15}, true}, Shot{".eyeL.ppm", HeadPose{0, 0, 0, -3.2f, 0, 0}, true}, Shot{".eyeR.ppm", HeadPose{0, 0, 0, 3.2f, 0, 0}, true}}) {
                 GLuint tex;
                 gr.native_world = native;
                 if (gr.render_cockpit3d(*frame, 1280, 720, head, &tex)) {
