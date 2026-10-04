@@ -328,7 +328,7 @@ Working:
   external views; F11 toggles 3D/flat; right-drag mouse look; OpenTrack
   UDP head tracking (6DOF; confirmed live with OpenTrack and the laptop
   webcam); gamepad as the PC joystick plus key bindings (gamepad.cfg; game
-  port loop checked headless, not yet flown with a real controller); F12
+  port loop checked headless; WMR motion controllers confirmed live in VR, needs a patched Monado, see vr.md); F12
   screenshots (+ engine frame + primitive dump); F19_PERF=1 timing.
 - Headless checks: `build/native/f19trace out/run/demo_native -n 380 -k n1 -H x.ppm`
   (demo flies itself; writes hi-res, world-only, page, mask, 3D renders;

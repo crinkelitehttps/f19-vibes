@@ -142,8 +142,9 @@ starting Monado. Monado main since b0b1d8b1b ("drivers: fix dead stores",
 2026-08) rejects every Bluetooth WMR controller ("Failed to get WMR
 Bluetooth controller string descriptor": `wmr_create_bt_controller`
 checks `ret != 0`, but the prober returns the string's length); the local
-AUR build carries a one-line patch (`ret <= 0`). With it, the right
-controller was confirmed live through OpenXR (2026-10-04). Mainline Monado tracks them by IMU only (no optical
+AUR build carries a one-line patch (`ret <= 0`). With it, both
+controllers were confirmed live through OpenXR (2026-10-04). Turn them on
+before starting Monado: it only probes at startup. Mainline Monado tracks them by IMU only (no optical
 constellation tracking), so f19 uses only their buttons and axes.
 
 `xr.cpp` creates one action set ("flight") with trigger, grip, menu,
