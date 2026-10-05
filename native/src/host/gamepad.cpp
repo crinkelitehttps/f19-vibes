@@ -15,6 +15,8 @@ namespace {
 
 // Typematic repeat of a held key, like a PC keyboard's defaults.
 constexpr uint64_t kRepeatDelayNs = 500'000'000, kRepeatPeriodNs = 50'000'000;
+// Held manual-page bindings keep turning pages, slower.
+constexpr uint64_t kPageRepeatPeriodNs = 150'000'000;
 
 bool is_trigger(int axis) { return axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER || axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER; }
 
@@ -35,6 +37,54 @@ SDL_Scancode parse_key_name(std::string name) {
     return SDL_GetScancodeFromName(name.c_str());
 }
 
+// Readable control names for the controls pages.
+std::string describe_motion(int input, int hand, int half) {
+    static const char* names[] = {"trigger", "grip", "menu", "stick x", "stick y", "stick click", "pad x", "pad y",
+                                  "pad click", "pad touch", "pad up", "pad down", "pad left", "pad right", "pad centre"};
+    std::string n = names[input];
+    if (half && (input == 3 || input == 6)) n = n.substr(0, n.size() - 2) + (half < 0 ? " left" : " right");
+    if (half && (input == 4 || input == 7)) n = n.substr(0, n.size() - 2) + (half < 0 ? " up" : " down");
+    return (hand ? "R " : "L ") + n;
+}
+
+std::string describe_pad(bool axis, int index, int half) {
+    if (axis) {
+        static const char* names[] = {"L stick x", "L stick y", "R stick x", "R stick y", "LT", "RT"};
+        std::string n = index >= 0 && index < 6 ? names[index] : "axis";
+        if (half && index < 4) n = n.substr(0, n.size() - 2) + (index % 2 ? (half < 0 ? " up" : " down") : (half < 0 ? " left" : " right"));
+        return n;
+    }
+    switch (index) {
+        case SDL_GAMEPAD_BUTTON_SOUTH: return "A";
+        case SDL_GAMEPAD_BUTTON_EAST: return "B";
+        case SDL_GAMEPAD_BUTTON_WEST: return "X";
+        case SDL_GAMEPAD_BUTTON_NORTH: return "Y";
+        case SDL_GAMEPAD_BUTTON_BACK: return "Back";
+        case SDL_GAMEPAD_BUTTON_GUIDE: return "Guide";
+        case SDL_GAMEPAD_BUTTON_START: return "Start";
+        case SDL_GAMEPAD_BUTTON_LEFT_STICK: return "L stick click";
+        case SDL_GAMEPAD_BUTTON_RIGHT_STICK: return "R stick click";
+        case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER: return "LB";
+        case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: return "RB";
+        case SDL_GAMEPAD_BUTTON_DPAD_UP: return "D-pad up";
+        case SDL_GAMEPAD_BUTTON_DPAD_DOWN: return "D-pad down";
+        case SDL_GAMEPAD_BUTTON_DPAD_LEFT: return "D-pad left";
+        case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: return "D-pad right";
+        case SDL_GAMEPAD_BUTTON_MISC1: return "Share";
+        case SDL_GAMEPAD_BUTTON_TOUCHPAD: return "Touchpad";
+    }
+    const char* n = SDL_GetGamepadStringForButton(SDL_GamepadButton(index));
+    return n ? n : "button";
+}
+
+std::string describe_key(SDL_Scancode sc, SDL_Keymod mod) {
+    std::string s;
+    if (mod & SDL_KMOD_CTRL) s += "Ctrl+";
+    if (mod & SDL_KMOD_ALT) s += "Alt+";
+    if (mod & SDL_KMOD_SHIFT) s += "Shift+";
+    return s + SDL_GetScancodeName(sc);
+}
+
 }  // namespace
 
 bool Gamepad::Control::full_axis() const {
@@ -49,16 +99,36 @@ Gamepad::~Gamepad() {
 
 bool Gamepad::load(const std::string& text, const std::string& source) {
     bindings_.clear();
-    bool ok = true;
+    help_.clear();
+    bool ok = true, gap = false;
     std::istringstream in(text);
     std::string line;
     for (int lineno = 1; std::getline(in, line); lineno++) {
-        if (auto hash = line.find('#'); hash != std::string::npos) line.resize(hash);
+        std::string note;
+        if (auto hash = line.find('#'); hash != std::string::npos) {
+            note = line.substr(hash + 1);
+            note.erase(0, note.find_first_not_of(" \t"));
+            line.resize(hash);
+        }
         std::istringstream ls(line);
         std::string control, action, arg;
-        if (!(ls >> control)) continue;
+        if (!(ls >> control)) {
+            gap |= note.empty();  // blank lines separate groups
+            continue;
+        }
         int layer = 0;
+        bool manual_layer = false;
+        if (control == "manual") {
+            manual_layer = true;
+            control.clear();
+            ls >> control;
+        }
         if (control == "shift1" || control == "shift2") {
+            if (manual_layer) {
+                std::fprintf(stderr, "%s:%d: manual layer bindings take no shift\n", source.c_str(), lineno);
+                ok = false;
+                continue;
+            }
             layer = control[5] - '0';
             control.clear();
             ls >> control;
@@ -79,9 +149,10 @@ bool Gamepad::load(const std::string& text, const std::string& source) {
             continue;
         }
 
-        if (control.empty()) { fail("missing control after shift prefix"); continue; }
+        if (control.empty()) { fail("missing control after layer prefix"); continue; }
         Binding b;
         b.layer = layer;
+        b.manual_layer = manual_layer;
         std::string name = control;
         if (name.size() > 1 && (name.back() == '-' || name.back() == '+')) {
             b.control.half = name.back() == '-' ? -1 : 1;
@@ -121,9 +192,18 @@ bool Gamepad::load(const std::string& text, const std::string& source) {
             if (arg == "invert" && args.size() == 1) b.invert = true;
             else if (!args.empty()) { fail(("unexpected '" + arg + "'").c_str()); continue; }
         } else if (action == "button1" || action == "button2" || action == "key" || action == "cycle" || action == "recenter" ||
-                   action == "shift1" || action == "shift2") {
+                   action == "shift1" || action == "shift2" || action == "manual" || action == "manual-page") {
             if (full_axis) { fail(("use " + control + "- or " + control + "+ to act as a button").c_str()); continue; }
-            if (action == "shift1" || action == "shift2") {
+            if (action == "manual") {
+                b.action = Action::Manual;
+                if (!args.empty()) { fail(("unexpected '" + arg + "'").c_str()); continue; }
+            } else if (action == "manual-page") {
+                b.action = Action::ManualPage;
+                char* end = nullptr;
+                long n = args.size() == 1 ? std::strtol(arg.c_str(), &end, 10) : 0;
+                if (!n || *end || n < -1000 || n > 1000) { fail("expected a page count, e.g. 'manual-page +1' or 'manual-page -10'"); continue; }
+                b.pages = int(n);
+            } else if (action == "shift1" || action == "shift2") {
                 b.action = Action::Shift;
                 b.layer = action[5] - '0';
                 if (!args.empty()) { fail(("unexpected '" + arg + "'").c_str()); continue; }
@@ -160,12 +240,51 @@ bool Gamepad::load(const std::string& text, const std::string& source) {
             fail(action.empty() ? "missing action" : ("unknown action '" + action + "'").c_str());
             continue;
         }
-        if (layer && b.action != Action::Key && b.action != Action::Cycle && b.action != Action::Recenter) {
-            fail("only key, cycle and recenter bindings can be shifted");
+        const bool pressable = b.action == Action::Key || b.action == Action::Cycle || b.action == Action::Recenter ||
+                               b.action == Action::Manual || b.action == Action::ManualPage;
+        if (layer && !pressable) {
+            fail("only key, cycle, recenter and manual bindings can be shifted");
+            continue;
+        }
+        if (manual_layer && !pressable) {
+            fail("only key, cycle, recenter and manual bindings can be in the manual layer");
             continue;
         }
         bindings_.push_back(b);
+
+        Help h;
+        h.vr = b.control.source == Source::Motion;
+        h.gap = gap;
+        gap = false;
+        h.control = b.control.source == Source::Motion ? describe_motion(b.control.index, b.control.hand, b.control.half)
+                                                        : describe_pad(b.control.source == Source::Axis, b.control.index, b.control.half);
+        if (b.layer && b.action != Action::Shift) h.control = "S" + std::to_string(b.layer) + " " + h.control;
+        if (b.manual_layer) h.control = "M " + h.control;
+        switch (b.action) {
+            case Action::StickX: h.action = "stick x"; break;
+            case Action::StickY: h.action = "stick y"; break;
+            case Action::LookX: h.action = "look x"; break;
+            case Action::LookY: h.action = "look y"; break;
+            case Action::Button1: h.action = "button 1"; break;
+            case Action::Button2: h.action = "button 2"; break;
+            case Action::Recenter: h.action = "recentre"; break;
+            case Action::Shift: h.action = "shift " + std::to_string(b.layer); break;
+            case Action::Manual: h.action = "clipboard"; break;
+            case Action::ManualPage: h.action = (b.pages > 0 ? "page +" : "page ") + std::to_string(b.pages); break;
+            case Action::Key:
+            case Action::Cycle:
+                for (const Chord& c : b.keys) h.action += (h.action.empty() ? "" : " ") + describe_key(c.sc, c.mod);
+                break;
+        }
+        if (b.invert) h.action += " inverted";
+        h.note = note;
+        help_.push_back(h);
     }
+    for (auto& b : bindings_)
+        for (const auto& m : bindings_)
+            if (m.manual_layer && !b.manual_layer && m.control.source == b.control.source && m.control.index == b.control.index &&
+                m.control.hand == b.control.hand && m.control.half == b.control.half)
+                b.shadowed = true;
     return ok;
 }
 
@@ -258,7 +377,7 @@ void Gamepad::release_all() {
         }
 }
 
-Gamepad::State Gamepad::update(uint64_t now_ns, const MotionControllers* vr) {
+Gamepad::State Gamepad::update(uint64_t now_ns, const MotionControllers* vr, bool manual_shown) {
     State s;
     vr_ = vr;
     s.connected = pad_ || (vr && (vr->active[0] || vr->active[1]));
@@ -266,12 +385,14 @@ Gamepad::State Gamepad::update(uint64_t now_ns, const MotionControllers* vr) {
     int layer = 0;
     for (auto& b : bindings_)
         if (b.action == Action::Shift && pressed(b.control)) layer |= b.layer;
-    // A key, cycle or recenter binding takes a fresh press in its own layer
-    // and then stays held until the control is released, whatever the
-    // shifts do meanwhile.
+    // A key, cycle, recenter or manual binding takes a fresh press in its
+    // own layer and then stays held until the control is released, whatever
+    // the shifts do meanwhile. While the manual is shown, `manual` layer
+    // bindings act (whatever the shifts) in place of their controls' others.
     auto press = [&](Binding& b) {
         bool raw = pressed(b.control);
-        bool p = b.held ? raw : raw && !b.was_down && layer == b.layer;
+        bool active = b.manual_layer ? manual_shown : layer == b.layer && !(manual_shown && b.shadowed);
+        bool p = b.held ? raw : raw && !b.was_down && active;
         b.was_down = raw;
         return p;
     };
@@ -312,6 +433,24 @@ Gamepad::State Gamepad::update(uint64_t now_ns, const MotionControllers* vr) {
             case Action::Recenter: {
                 bool p = press(b);
                 s.recenter |= p && !b.held;
+                b.held = p;
+                break;
+            }
+            case Action::Manual: {
+                bool p = press(b);
+                s.manual |= p && !b.held;
+                b.held = p;
+                break;
+            }
+            case Action::ManualPage: {
+                bool p = press(b);
+                if (p && !b.held) {
+                    s.manual_page += b.pages;
+                    b.next_repeat_ns = now_ns + kRepeatDelayNs;
+                } else if (p && now_ns >= b.next_repeat_ns) {
+                    s.manual_page += b.pages;
+                    b.next_repeat_ns = now_ns + kPageRepeatPeriodNs;
+                }
                 b.held = p;
                 break;
             }

@@ -157,7 +157,7 @@ and syncs them each frame while the session is focused
 hand flies (thumbstick = joystick, trigger = button 1 / cannon, grip =
 button 2 / missiles) and the left thumbstick's y is the throttle. The left
 trigger and grip are shift 1 and shift 2 for both hands; the trackpads are
-four-way pads (centre unused, hard to press) laid out like the cockpit:
+four-way pads (centre hard to press; the left one also shows the manual) laid out like the cockpit:
 left = map zoom and waypoint select, shift 1 the left panel (autopilot,
 gear, flaps, brakes), shift 2 moves the waypoint (shift 2 + left menu =
 F8, change waypoint); right = TrackCam directions, shift 1 the right panel
@@ -166,6 +166,13 @@ buttons: left F3 / F7 / F8, right page cycle F4-F6-F10 / F2 HUD / F9 ILS.
 Left thumbstick click recentres the view (`recenter`, same as Shift+F12).
 The Xbox pad follows the same scheme (D-pad = left trackpad, Y/A/X/B =
 right trackpad).
+
+The clipboard (Ctrl+F11 on the keyboard), with the controls on its first
+pages and then the manual, sits in the cockpit, in
+front of the panel: shift 2 + right trackpad down (or a left trackpad
+centre click) shows / hides it; while it is up, the left trackpad turns
+pages (left / right one, up / down ten) through the `manual` binding
+layer. Lean in to read small print. Xbox: Shift 2 + A (or Share), D-pad.
 
 ## Not done
 

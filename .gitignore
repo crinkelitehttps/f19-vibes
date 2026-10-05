@@ -11,6 +11,8 @@ __pycache__/
 # Full game (copyrighted, kept locally only). Verify: cd fullgame && sha256sum -c ../fullgame.sha256
 /fullgame/
 /f19stealthfighter.zip
+# Game manual scan (copyrighted, kept locally only; shown on the in-game clipboard)
+/F19-StealthFighter-Manual.pdf
 
 # F12 screenshots and debug dumps (frames of the game: keep local)
 /f19-*.bmp

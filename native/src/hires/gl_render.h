@@ -82,6 +82,18 @@ public:
     // objects in stereo). World units are assumed to be feet.
     float world_units_per_cm = 1.0f / 30.48f;
 
+    // The manual on a clipboard: in the 3D views a quad in the cockpit,
+    // facing the neutral eye in front of the panel; elsewhere drawn flat
+    // over the screen (draw_manual_2d).
+    bool show_manual = false;
+    float manual_width = 0.70f, manual_center[3] = {0.0f, -0.11f, 0.69f};
+    float manual_tilt_deg = 9.0f;  // top edge leans away from the viewer
+    // The clipboard image (0xAARRGGBB words, top row first; mipmapped).
+    void set_manual(const uint32_t* argb, int w, int h);
+    bool has_manual() const { return manual_w_ > 0; }
+    // Draw the clipboard over framebuffer `fbo` (fb_w x fb_h), centred.
+    void draw_manual_2d(GLuint fbo, int fb_w, int fb_h);
+
     // A w x h RGBA8 image (0xAARRGGBB words) as a texture (`nearest` filtering).
     GLuint upload(const uint32_t* argb, int w, int h);
     // Draw `tex` into the window's default framebuffer at `rect` (pixels,
@@ -123,6 +135,8 @@ private:
     void draw_textured(GLuint tex, float x0, float y0, float x1, float y1);  // NDC
     GLuint sky_prog_ = 0, panel_prog_ = 0, panel_vao_ = 0, panel_vbo_ = 0, panel_tex_ = 0;
     GLint sky_loc_[6] = {}, panel_mvp_loc_ = -1, panel_tex_loc_ = -1;
+    GLuint manual_tex_ = 0;
+    int manual_w_ = 0, manual_h_ = 0;
     void draw_groups();
 };
 

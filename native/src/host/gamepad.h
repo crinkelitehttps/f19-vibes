@@ -45,8 +45,23 @@ public:
         bool button[2] = {};
         float look_x = 0, look_y = 0;    // -1..1, y up +
         bool recenter = false;           // a recenter binding was just pressed
+        bool manual = false;             // a manual binding was just pressed (show / hide it)
+        int manual_page = 0;             // pages to turn (manual-page bindings)
     };
-    State update(uint64_t now_ns, const MotionControllers* vr = nullptr);
+    // `manual_shown`: the manual is up, so `manual` layer bindings act (and
+    // their controls' other bindings don't).
+    State update(uint64_t now_ns, const MotionControllers* vr = nullptr, bool manual_shown = false);
+
+    // The loaded bindings in readable form, in file order (for the
+    // clipboard's controls pages).
+    struct Help {
+        bool vr = false;          // a motion controller binding
+        bool gap = false;         // a blank line before it in the file
+        std::string control;      // e.g. "S2 L pad up", "M D-pad left"
+        std::string action;       // e.g. "Shift+Up", "button 1"
+        std::string note;         // the line's comment
+    };
+    const std::vector<Help>& help() const { return help_; }
 
 private:
     enum class Source { Button, Axis, Motion };
@@ -63,7 +78,7 @@ private:
         int half = 0;   // axis as button: -1 / +1 (0: full axis, or trigger)
         bool full_axis() const;
     };
-    enum class Action { StickX, StickY, LookX, LookY, Button1, Button2, Key, Cycle, Recenter, Shift };
+    enum class Action { StickX, StickY, LookX, LookY, Button1, Button2, Key, Cycle, Recenter, Shift, Manual, ManualPage };
     struct Chord {
         SDL_Scancode sc = SDL_SCANCODE_UNKNOWN;
         SDL_Keymod mod = SDL_KMOD_NONE;
@@ -74,14 +89,21 @@ private:
         bool invert = false;
         std::vector<Chord> keys;  // Key: one; Cycle: pressed in turn
         size_t step = 0;          // Cycle: the key the next press sends
-        // Key, cycle, recenter: the shift layer it acts in (0 none, 1, 2).
+        // Key, cycle, recenter, manual: the shift layer it acts in (0 none, 1, 2).
         // Shift: the shift it holds (1, 2).
         int layer = 0;
+        int pages = 0;            // ManualPage: pages per press (- back)
+        // In the `manual` layer: acts only while the manual is shown.
+        bool manual_layer = false;
+        // Its control has a `manual` layer binding, which takes over while
+        // the manual is shown.
+        bool shadowed = false;
         bool held = false;
         bool was_down = false;    // the control, last update
         uint64_t next_repeat_ns = 0;
     };
     std::vector<Binding> bindings_;
+    std::vector<Help> help_;
     float deadzone_ = 0.12f, threshold_ = 0.5f;
     SDL_Gamepad* pad_ = nullptr;
     const MotionControllers* vr_ = nullptr;  // during update()

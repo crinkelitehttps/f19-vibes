@@ -340,6 +340,16 @@ Working:
   webcam); gamepad as the PC joystick plus key bindings (gamepad.cfg; game
   port loop checked headless; WMR motion controllers confirmed live in VR, needs a patched Monado, see vr.md); F12
   screenshots (+ engine frame + primitive dump); F19_PERF=1 timing.
+- A clipboard in the cockpit (`host/manual.cpp`): controls pages generated
+  from the loaded bindings (per device, then host keys and the game keys
+  the bindings press; console font), then the game manual: the user's PDF
+  (`--manual FILE`, else the first *.pdf in GAMEDIR or the current
+  directory) rendered with poppler-cpp (optional at build time) on a
+  background thread, margins trimmed, onto a clipboard image (page n / N on
+  the clip); a mipmapped quad in the 3D views, drawn flat over menus and
+  flat views. Ctrl+F11 shows it; PgUp/PgDn (Shift: 10), Home/End, wheel;
+  controllers through the `manual` binding layer (gamepad.cfg). The page
+  is remembered in ~/.local/state/f19/manual-page.
 - Headless checks: `build/native/f19trace out/run/demo_native -n 380 -k n1 -H x.ppm`
   (demo flies itself; writes hi-res, world-only, page, mask, 3D renders;
   -n 380 lands on a cockpit frame, -n 330 now gives an external view).

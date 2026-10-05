@@ -661,6 +661,64 @@ GLuint GlRenderer::render_view(const HiresFrame& f, int w, int h, const EyeView&
     BufferData(GL_ARRAY_BUFFER, GLsizeiptr(verts_.size() * sizeof(Vert)), verts_.data(), GL_STREAM_DRAW);
     draw_groups();
 
+    // Cockpit surfaces' transform: perspective (same focal as the world) *
+    // aircraft->view rotation * eye offset (head position; z back +,
+    // aircraft z forward). The eye stays behind z = max_z.
+    auto mul4 = [](const float* a, const float* b, float* r) {  // column-major r = a b
+        for (int col = 0; col < 4; col++)
+            for (int row = 0; row < 4; row++) {
+                float acc = 0;
+                for (int k = 0; k < 4; k++) acc += a[k * 4 + row] * b[col * 4 + k];
+                r[col * 4 + row] = acc;
+            }
+    };
+    auto cockpit_mvp = [&](float max_z, float* P, float* R, float* mvp) {
+        float ex = eye.pos[0] * panel_units_per_cm, ey = eye.pos[1] * panel_units_per_cm;
+        float ez = std::min(eye.pos[2] * panel_units_per_cm, max_z);
+        float tv[3];
+        for (int i = 0; i < 3; i++) tv[i] = -(V.m[i][0] * ex + V.m[i][1] * ey + V.m[i][2] * ez);
+        float sx = 2 * fx / w, sy = 2 * fy / h, n = 0.01f, fa = 100.0f;
+        float ox = 2 * cx / w - 1, oy = 1 - 2 * cy / h;  // off-centre (asymmetric) frustum
+        const float p[16] = {sx, 0, 0, 0, 0, sy, 0, 0, ox, oy, (fa + n) / (fa - n), 1, 0, 0, -2 * fa * n / (fa - n), 0};
+        const float r[16] = {V.m[0][0], V.m[1][0], V.m[2][0], 0, V.m[0][1], V.m[1][1], V.m[2][1], 0,
+                             V.m[0][2], V.m[1][2], V.m[2][2], 0, tv[0], tv[1], tv[2], 1};
+        std::copy_n(p, 16, P);
+        std::copy_n(r, 16, R);
+        mul4(P, R, mvp);
+    };
+    auto draw_quad = [&](const float (&q)[4][5]) {  // corners TL, TR, BR, BL: x, y, z, u, v
+        float tri[6][5];
+        int order[6] = {0, 1, 2, 0, 2, 3};
+        for (int i = 0; i < 6; i++) std::copy_n(q[order[i]], 5, tri[i]);
+        BindVertexArray(panel_vao_);
+        BindBuffer(GL_ARRAY_BUFFER, panel_vbo_);
+        BufferData(GL_ARRAY_BUFFER, sizeof tri, tri, GL_STREAM_DRAW);
+        DrawArrays(GL_TRIANGLES, 0, 6);
+    };
+    // The manual's clipboard, in front of everything in the cockpit.
+    auto draw_clipboard = [&] {
+        if (!show_manual || !manual_w_) return;
+        const float* mc = manual_center;
+        float mvp[16], P[16], R[16];
+        cockpit_mvp(mc[2] - 0.2f, P, R, mvp);
+        UseProgram(panel_prog_);
+        UniformMatrix4fv(panel_mvp_loc_, 1, GL_FALSE, mvp);
+        Uniform1i(panel_tex_loc_, 0);
+        ActiveTexture(GL_TEXTURE0);
+        BindTexture(GL_TEXTURE_2D, manual_tex_);
+        Disable(GL_DEPTH_TEST);
+        Disable(GL_BLEND);
+        float mw = manual_width, mh = mw * manual_h_ / manual_w_;
+        float t = manual_tilt_deg * 3.14159265f / 180.0f, uy = std::cos(t), uz = std::sin(t);
+        float q[4][5] = {
+            {mc[0] - mw / 2, mc[1] + uy * mh / 2, mc[2] + uz * mh / 2, 0, 0},
+            {mc[0] + mw / 2, mc[1] + uy * mh / 2, mc[2] + uz * mh / 2, 1, 0},
+            {mc[0] + mw / 2, mc[1] - uy * mh / 2, mc[2] - uz * mh / 2, 1, 1},
+            {mc[0] - mw / 2, mc[1] - uy * mh / 2, mc[2] - uz * mh / 2, 0, 1},
+        };
+        draw_quad(q);
+    };
+
     // Cockpit surfaces, fixed in the aircraft frame: the HUD (the page's 2D
     // layer above the 3D viewport) on an upright quad ahead of the panel, and
     // the instrument panel (page rows below the viewport) on a tilted quad.
@@ -679,44 +737,15 @@ GLuint GlRenderer::render_view(const HiresFrame& f, int w, int h, const EyeView&
         PixelStorei(GL_UNPACK_ALIGNMENT, 4);
         TexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 320, 200, GL_BGRA, GL_UNSIGNED_BYTE, px.data());
 
-        // MVP: perspective (same focal as the world) * aircraft->view rotation
-        // * eye offset (head position; z back +, aircraft z forward). The eye
-        // stays behind the panel.
         const float* c = panel_center;
-        float ex = eye.pos[0] * panel_units_per_cm, ey = eye.pos[1] * panel_units_per_cm;
-        float ez = std::min(eye.pos[2] * panel_units_per_cm, c[2] - 0.25f);
-        float tv[3];
-        for (int i = 0; i < 3; i++) tv[i] = -(V.m[i][0] * ex + V.m[i][1] * ey + V.m[i][2] * ez);
-        float sx = 2 * fx / w, sy = 2 * fy / h, n = 0.01f, fa = 100.0f;
-        float ox = 2 * cx / w - 1, oy = 1 - 2 * cy / h;  // off-centre (asymmetric) frustum
-        float P[16] = {sx, 0, 0, 0, 0, sy, 0, 0, ox, oy, (fa + n) / (fa - n), 1, 0, 0, -2 * fa * n / (fa - n), 0};
-        float R[16] = {V.m[0][0], V.m[1][0], V.m[2][0], 0, V.m[0][1], V.m[1][1], V.m[2][1], 0,
-                       V.m[0][2], V.m[1][2], V.m[2][2], 0, tv[0], tv[1], tv[2], 1};
-        auto mul4 = [](const float* a, const float* b, float* r) {  // column-major r = a b
-            for (int col = 0; col < 4; col++)
-                for (int row = 0; row < 4; row++) {
-                    float acc = 0;
-                    for (int k = 0; k < 4; k++) acc += a[k * 4 + row] * b[col * 4 + k];
-                    r[col * 4 + row] = acc;
-                }
-        };
-        float mvp[16];
-        mul4(P, R, mvp);
+        float mvp[16], P[16], R[16];
+        cockpit_mvp(c[2] - 0.25f, P, R, mvp);
         UseProgram(panel_prog_);
         UniformMatrix4fv(panel_mvp_loc_, 1, GL_FALSE, mvp);
         Uniform1i(panel_tex_loc_, 0);
         ActiveTexture(GL_TEXTURE0);
         BindTexture(GL_TEXTURE_2D, panel_tex_);
-        BindVertexArray(panel_vao_);
-        BindBuffer(GL_ARRAY_BUFFER, panel_vbo_);
         Disable(GL_DEPTH_TEST);
-        auto draw_quad = [&](const float (&q)[4][5]) {  // corners TL, TR, BR, BL: x, y, z, u, v
-            float tri[6][5];
-            int order[6] = {0, 1, 2, 0, 2, 3};
-            for (int i = 0; i < 6; i++) std::copy_n(q[order[i]], 5, tri[i]);
-            BufferData(GL_ARRAY_BUFFER, sizeof tri, tri, GL_STREAM_DRAW);
-            DrawArrays(GL_TRIANGLES, 0, 6);
-        };
 
         // HUD first (the panel may cover its lower edge). Collimated, as
         // a real HUD: drawn at infinity (rotation only, no eye offset), so
@@ -762,6 +791,7 @@ GLuint GlRenderer::render_view(const HiresFrame& f, int w, int h, const EyeView&
             {c[0] - pw / 2, c[1] - uy * ph / 2, c[2] - uz * ph / 2, 0, 1},
         };
         draw_quad(q);
+        draw_clipboard();
     }
 
     BindFramebuffer(GL_READ_FRAMEBUFFER, ms_fbo_);
@@ -787,6 +817,11 @@ GLuint GlRenderer::render_view(const HiresFrame& f, int w, int h, const EyeView&
         draw_textured(overlay_tex_, -half, -1, half, 1);
         Disable(GL_BLEND);
     }
+    if (external) {
+        BindFramebuffer(GL_FRAMEBUFFER, out_fbo_);
+        Viewport(0, 0, w, h);
+        draw_clipboard();
+    }
     if (dst) {
         BindFramebuffer(GL_READ_FRAMEBUFFER, out_fbo_);
         BindFramebuffer(GL_DRAW_FRAMEBUFFER, dst);
@@ -794,6 +829,43 @@ GLuint GlRenderer::render_view(const HiresFrame& f, int w, int h, const EyeView&
     }
     BindFramebuffer(GL_FRAMEBUFFER, 0);
     return out_tex_;
+}
+
+void GlRenderer::set_manual(const uint32_t* argb, int w, int h) {
+    if (!manual_tex_) {
+        GenTextures(1, &manual_tex_);
+        BindTexture(GL_TEXTURE_2D, manual_tex_);
+        TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        // Anisotropic filtering keeps text sharp on the tilted board
+        // (EXT_texture_filter_anisotropic; ignored where unsupported).
+        TexParameterf(GL_TEXTURE_2D, 0x84FE /* GL_TEXTURE_MAX_ANISOTROPY */, 8.0f);
+        GetError();
+    }
+    BindTexture(GL_TEXTURE_2D, manual_tex_);
+    PixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    if (w != manual_w_ || h != manual_h_) {
+        TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_BGRA, GL_UNSIGNED_BYTE, argb);
+        manual_w_ = w;
+        manual_h_ = h;
+    } else {
+        TexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_BGRA, GL_UNSIGNED_BYTE, argb);
+    }
+    GenerateMipmap(GL_TEXTURE_2D);
+}
+
+void GlRenderer::draw_manual_2d(GLuint fbo, int fb_w, int fb_h) {
+    if (!show_manual || !manual_w_) return;
+    BindFramebuffer(GL_FRAMEBUFFER, fbo);
+    Viewport(0, 0, fb_w, fb_h);
+    Disable(GL_BLEND);
+    // Fit 96% of the framebuffer, keeping the image's aspect.
+    float s = 0.96f * std::min(float(fb_w) / manual_w_, float(fb_h) / manual_h_);
+    float hw = manual_w_ * s / fb_w, hh = manual_h_ * s / fb_h;  // NDC half sizes
+    draw_textured(manual_tex_, -hw, -hh, hw, hh);  // uploads: y0 is the bottom
+    BindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 GLuint GlRenderer::upload(const uint32_t* argb, int w, int h) {

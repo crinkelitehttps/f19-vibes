@@ -33,11 +33,19 @@
 // default 0.5), --no-sound, --raw-speaker (no speaker-cone response, just
 // the ideal 1-bit signal band-limited).
 //
+// Clipboard: the controls (made from the loaded bindings), then the game's
+// manual (a PDF: --manual FILE, else the first *.pdf in GAMEDIR or the
+// current directory), on a clipboard in the cockpit, or over the screen
+// elsewhere. Ctrl+F11 shows / hides it; while it is up, Page Up /
+// Page Down (with Shift: 10 pages), Home (the controls) / End and the
+// mouse wheel turn pages. Controllers: the `manual` and `manual-page` bindings. The page
+// being read is remembered (~/.local/state/f19/manual-page).
+//
 // Set F19_PERF=1 for a once-a-second timing summary.
 //
 // Usage: f19 [GAMEDIR] [--scale N] [--mips N] [--msaa N] [--vga-hz HZ] [--headtrack-port N] [--headtrack-bind ADDR]
 //            [--trace] [--original-driver] [--verify-driver] [--lowres] [--lod-detail F] [--terrain-radius N]
-//            [--vr] [--vr-scale F] [--gamepad FILE] [--volume F] [--no-sound] [--raw-speaker]
+//            [--vr] [--vr-scale F] [--gamepad FILE] [--volume F] [--no-sound] [--raw-speaker] [--manual FILE]
 //   --lod-detail F: > 1 keeps detailed models farther away (default 1 =
 //   switch at the same on-screen size as the original). --terrain-radius N:
 //   terrain tiles drawn in every direction per level (default 6).
@@ -46,7 +54,6 @@
 //   GAMEDIR defaults to the current directory; it must be writable (the
 //   game saves its roster there). Use a copy of the original files.
 #include <SDL3/SDL.h>
-#include <zlib.h>
 
 #include <algorithm>
 #include <atomic>
@@ -57,6 +64,7 @@
 #include <ctime>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -65,50 +73,17 @@
 #include "drivers/mgraphic.h"
 #include "hires/gl_render.h"
 #include "hires/world_capture.h"
+#include "host/font.h"
 #include "host/gamepad.h"
 #include "host/headtrack.h"
 #include "host/keyboard.h"
+#include "host/manual.h"
 #include "host/xr.h"
 #include "gamepad_cfg.h"
 
 using namespace f19;
 
 namespace {
-
-// ------------------------------------------------------------ text font
-
-struct Font {
-    int w = 8, h = 16;
-    std::vector<uint8_t> glyphs;  // 256 * h bytes
-};
-
-// Load a PSF1/PSF2 console font (gzip or plain) from the system.
-bool load_psf(const char* path, Font& font) {
-    gzFile gz = gzopen(path, "rb");
-    if (!gz) return false;
-    std::vector<uint8_t> d;
-    uint8_t buf[4096];
-    int n;
-    while ((n = gzread(gz, buf, sizeof buf)) > 0) d.insert(d.end(), buf, buf + n);
-    gzclose(gz);
-    if (d.size() > 4 && d[0] == 0x36 && d[1] == 0x04) {
-        font.h = d[3];
-        font.glyphs.assign(d.begin() + 4, d.begin() + 4 + 256 * font.h);
-        return true;
-    }
-    if (d.size() > 32 && d[0] == 0x72 && d[1] == 0xB5 && d[2] == 0x4A && d[3] == 0x86) {
-        auto u32 = [&](int o) { return uint32_t(d[o] | d[o + 1] << 8 | d[o + 2] << 16 | d[o + 3] << 24); };
-        uint32_t hdr = u32(8), bytes = u32(20);
-        font.h = int(u32(24));
-        font.w = int(u32(28));
-        if (font.w != 8) return false;
-        font.glyphs.resize(256 * font.h);
-        for (int g = 0; g < 256; g++)
-            std::memcpy(&font.glyphs[g * font.h], &d[hdr + g * bytes], font.h);
-        return true;
-    }
-    return false;
-}
 
 // CGA/EGA text attribute colours.
 const uint32_t kTextPalette[16] = {
@@ -152,6 +127,13 @@ void save_screenshot(GlRenderer& r, int w, int h, const HiresFrame* frame) {
     std::fprintf(stderr, "screenshot: %s.bmp\n", base.c_str());
 }
 
+// Where the manual page being read is kept between runs.
+std::string manual_state_path() {
+    const char* xdg = std::getenv("XDG_STATE_HOME");
+    const char* home = std::getenv("HOME");
+    return xdg && *xdg ? std::string(xdg) + "/f19/manual-page" : home ? std::string(home) + "/.local/state/f19/manual-page" : "";
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -168,7 +150,7 @@ int main(int argc, char** argv) {
     bool trace = false, original_driver = false, verify_driver = false, lowres = false, no_depth = false;
     float lod_detail = 1.0f;
     int terrain_radius = 6;
-    std::string gamepad_cfg;
+    std::string gamepad_cfg, manual_pdf;
     bool sound = true, raw_speaker = false;
     float volume = 0.5f;
     for (int i = 1; i < argc; i++) {
@@ -192,6 +174,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--volume") && i + 1 < argc) volume = std::clamp(float(std::atof(argv[++i])), 0.0f, 1.0f);
         else if (!std::strcmp(argv[i], "--no-sound")) sound = false;
         else if (!std::strcmp(argv[i], "--raw-speaker")) raw_speaker = true;
+        else if (!std::strcmp(argv[i], "--manual") && i + 1 < argc) manual_pdf = argv[++i];
         else dir = argv[i];
     }
 
@@ -284,6 +267,78 @@ int main(int argc, char** argv) {
         }
         gamepad.load(text, source);
     }
+    // The manual: pages render in the background; the one being read is
+    // uploaded to the renderer when it is ready.
+    Manual manual;
+    manual.set_font(font);
+    {
+        // Controls pages, from the bindings: the device in use first, then
+        // the keyboard (host keys, and the game keys the bindings press).
+        auto row = [](std::string a, const std::string& b, const std::string& c) {
+            a.resize(std::max<size_t>(a.size() + 1, 20), ' ');
+            std::string ab = a + b;
+            ab.resize(std::max<size_t>(ab.size() + 1, 38), ' ');
+            return ab + c;
+        };
+        Manual::Section sec[2] = {{"VR motion controllers", {}}, {"Gamepad (Xbox layout)", {}}};
+        for (auto& sc : sec)
+            sc.lines = {"S1 / S2: hold shift 1 / 2   M: while the clipboard is up", ""};
+        std::vector<std::string> game_keys;
+        for (const Gamepad::Help& h : gamepad.help()) {
+            auto& lines = sec[h.vr ? 0 : 1].lines;
+            if (h.gap) lines.push_back("");
+            lines.push_back(row(h.control, h.action, h.note));
+            if (!h.note.empty() && h.note[0] != '(' && h.action.find_first_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ=-/.,0123456789") == 0) {
+                std::string r = row(h.action, h.note, "");
+                if (std::find(game_keys.begin(), game_keys.end(), r) == game_keys.end()) game_keys.push_back(r);
+            }
+        }
+        Manual::Section keys{"Keyboard", {
+            row("Ctrl+F11", "show / hide the clipboard", ""),
+            row("PgUp / PgDn", "turn page (Shift: 10 pages)", ""),
+            row("Home / End", "these controls / last page", ""),
+            row("Mouse wheel", "turn page", ""),
+            "",
+            row("F11", "3D cockpit / original flat screen", ""),
+            row("Shift+F11", "native world / engine primitives", ""),
+            row("F12", "screenshot", ""),
+            row("Shift+F12", "VR: recentre the view", ""),
+            row("Right drag", "look around", ""),
+            "",
+            "Game keys used by the controller bindings:",
+        }};
+        keys.lines.insert(keys.lines.end(), game_keys.begin(), game_keys.end());
+        for (int k = 0; k < 2; k++)
+            if (const int i = vr ? k : 1 - k; sec[i].lines.size() > 2) manual.add_section(sec[i]);
+        manual.add_section(keys);
+    }
+    if (std::string pdf = find_manual(manual_pdf, dir); !pdf.empty()) manual.open(pdf);
+    bool manual_shown = false, manual_hint = false;
+    int manual_page = 0, manual_uploaded = -1;
+    uint64_t manual_version = 1, shown_manual_version = 0;  // what the 3D desktop view last drew
+    if (manual.ok()) {
+        const std::string state = manual_state_path();
+        if (FILE* f = state.empty() ? nullptr : std::fopen(state.c_str(), "r")) {
+            if (std::fscanf(f, "%d", &manual_page) != 1) manual_page = 0;
+            std::fclose(f);
+        }
+        manual_page = std::clamp(manual_page, 0, manual.pages() - 1);
+        manual.request(manual_page);
+    }
+    auto toggle_manual = [&] {
+        if (manual.ok()) {
+            manual_shown = !manual_shown;
+            manual_version++;
+        } else if (!manual_hint) {
+            manual_hint = true;
+            std::fprintf(stderr, "manual: none loaded (put the PDF in the game directory or pass --manual FILE)\n");
+        }
+    };
+    auto turn_manual = [&](int pages) {
+        if (!manual.ok() || !pages) return;
+        manual_page = std::clamp(manual_page + pages, 0, manual.pages() - 1);
+        manual.request(manual_page);
+    };
     HeadPose shown_head;
     HeadTracker tracker;
     if (headtrack_port > 0) {
@@ -408,8 +463,11 @@ int main(int argc, char** argv) {
             }
             if (ev.type == SDL_EVENT_KEY_UP && ev.key.scancode == SDL_SCANCODE_F12) continue;
             if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.scancode == SDL_SCANCODE_F11 && !ev.key.repeat) {
-                // F11: 3D / flat; Shift+F11: native world / engine's primitives.
-                if (ev.key.mod & SDL_KMOD_SHIFT) {
+                // F11: 3D / flat; Shift+F11: native world / engine's
+                // primitives; Ctrl+F11: the manual.
+                if (ev.key.mod & SDL_KMOD_CTRL) {
+                    toggle_manual();
+                } else if (ev.key.mod & SDL_KMOD_SHIFT) {
                     renderer.native_world = !renderer.native_world;
                     std::fprintf(stderr, "world: %s\n", renderer.native_world ? "native scene" : "engine primitives");
                 } else {
@@ -418,6 +476,20 @@ int main(int argc, char** argv) {
                 continue;
             }
             if (ev.type == SDL_EVENT_KEY_UP && ev.key.scancode == SDL_SCANCODE_F11) continue;
+            // While the manual is up, its page keys and the wheel turn pages
+            // (the game doesn't see them).
+            if (manual_shown && (ev.type == SDL_EVENT_KEY_DOWN || ev.type == SDL_EVENT_KEY_UP)) {
+                const SDL_Scancode sc = ev.key.scancode;
+                if (sc == SDL_SCANCODE_PAGEUP || sc == SDL_SCANCODE_PAGEDOWN || sc == SDL_SCANCODE_HOME || sc == SDL_SCANCODE_END) {
+                    if (ev.type == SDL_EVENT_KEY_DOWN) {
+                        const int n = (ev.key.mod & SDL_KMOD_SHIFT) ? 10 : 1;
+                        turn_manual(sc == SDL_SCANCODE_PAGEUP ? -n : sc == SDL_SCANCODE_PAGEDOWN ? n
+                                    : sc == SDL_SCANCODE_HOME ? -manual.pages() : manual.pages());
+                    }
+                    continue;
+                }
+            }
+            if (manual_shown && ev.type == SDL_EVENT_MOUSE_WHEEL && ev.wheel.y != 0) turn_manual(ev.wheel.y > 0 ? -1 : 1);
             // Freelook (adds to head tracking): hold the right mouse
             // button and drag (dragging up looks down, like a stick);
             // releasing recentres.
@@ -472,8 +544,17 @@ int main(int argc, char** argv) {
         // Gamepad: joystick and keys into the machine.
         MotionControllers vr_pads;
         const bool vr_pads_on = xr_on && xr.controllers(vr_pads);
-        const Gamepad::State pad = gamepad.update(SDL_GetTicksNS(), vr_pads_on ? &vr_pads : nullptr);
+        const Gamepad::State pad = gamepad.update(SDL_GetTicksNS(), vr_pads_on ? &vr_pads : nullptr, manual_shown);
         if (pad.recenter && xr_on) xr.recenter();
+        if (pad.manual) toggle_manual();
+        turn_manual(pad.manual_page);
+        if (manual_page != manual_uploaded)
+            if (auto img = manual.get(manual_page)) {
+                renderer.set_manual(img->argb.data(), Manual::kWidth, Manual::kHeight);
+                manual_uploaded = manual_page;
+                manual_version++;
+            }
+        renderer.show_manual = manual_shown;
         {
             std::lock_guard<std::mutex> lk(mtx);
             m.joystick.connected = pad.connected;
@@ -513,7 +594,8 @@ int main(int argc, char** argv) {
             hires_tex = 0;  // the desktop paths must render afresh
         } else if (use_hires && cockpit3d && !xr_frame) {
             // 3D view (cockpit and external views): fills the whole window.
-            if (frame != shown_frame || !hires_tex || !shown_3d || hires_w != ow || hires_h != oh || head != shown_head) {
+            if (frame != shown_frame || !hires_tex || !shown_3d || hires_w != ow || hires_h != oh || head != shown_head ||
+                manual_version != shown_manual_version) {
                 GLuint t3;
                 if (renderer.render_cockpit3d(*frame, ow, oh, head, &t3)) {
                     hires_tex = t3;
@@ -522,6 +604,7 @@ int main(int argc, char** argv) {
                     hires_w = ow;
                     hires_h = oh;
                     shown_head = head;
+                    shown_manual_version = manual_version;
                 } else {
                     shown_3d = false;
                 }
@@ -570,10 +653,15 @@ int main(int argc, char** argv) {
                 // Virtual screen in VR.
                 GLuint fb = xr.acquire_screen();
                 renderer.present_to(fb, tex, XrOutput::kScreenW, XrOutput::kScreenH, 0, 0, XrOutput::kScreenW, XrOutput::kScreenH);
+                renderer.draw_manual_2d(fb, XrOutput::kScreenW, XrOutput::kScreenH);
                 xr.release_screen();
             }
-            if (full_window) renderer.present(tex, ow, oh, 0, 0, float(ow), float(oh));
-            else renderer.present(tex, ow, oh, vx, vy, float(vw), float(vh));
+            if (full_window) {
+                renderer.present(tex, ow, oh, 0, 0, float(ow), float(oh));  // the 3D view has the clipboard
+            } else {
+                renderer.present(tex, ow, oh, vx, vy, float(vw), float(vh));
+                renderer.draw_manual_2d(0, ow, oh);
+            }
         }
         const uint64_t t_submit0 = SDL_GetTicksNS();
         perf_render_ns += t_submit0 - t_wait1;
@@ -619,6 +707,15 @@ int main(int argc, char** argv) {
     }
     quit = true;
     emu.join();
+    if (manual.ok()) {
+        const std::string state = manual_state_path();
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path(state).parent_path(), ec);
+        if (FILE* f = state.empty() ? nullptr : std::fopen(state.c_str(), "w")) {
+            std::fprintf(f, "%d\n", manual_page);
+            std::fclose(f);
+        }
+    }
     if (audio) SDL_DestroyAudioStream(audio);
     if (m.exited) std::fprintf(stderr, "stopped: %s\n", m.stop_reason.c_str());
     if (verify_driver) std::fprintf(stderr, "%s", native_gfx.report().c_str());

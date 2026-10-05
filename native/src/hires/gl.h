@@ -30,6 +30,8 @@ namespace f19::gl {
     X(PFNGLTEXIMAGE2DPROC, TexImage2D)                                           \
     X(PFNGLTEXSUBIMAGE2DPROC, TexSubImage2D)                                     \
     X(PFNGLTEXPARAMETERIPROC, TexParameteri)                                     \
+    X(PFNGLTEXPARAMETERFPROC, TexParameterf)                                     \
+    X(PFNGLGENERATEMIPMAPPROC, GenerateMipmap)                                   \
     X(PFNGLACTIVETEXTUREPROC, ActiveTexture)                                     \
     X(PFNGLCREATESHADERPROC, CreateShader)                                       \
     X(PFNGLSHADERSOURCEPROC, ShaderSource)                                       \
