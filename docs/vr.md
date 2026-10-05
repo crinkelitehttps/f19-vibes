@@ -153,14 +153,19 @@ thumbstick (+click) and trackpad (+click, +touch) actions, both hands as
 subaction paths, suggested for `/interaction_profiles/microsoft/motion_controller`,
 and syncs them each frame while the session is focused
 (`XrOutput::controllers`). The state goes through the gamepad bindings
-(`native/gamepad.cfg`, `left-`/`right-` controls): by default the right
-thumbstick is the joystick, right trigger / grip are fire buttons 1 / 2,
-the left thumbstick's y is the throttle, the trackpads are four-way
-pads with a centre click for weapons, defences and flight controls (right
-trackpad: centre = HUD mode, right = `cycle` through the right CRT's
-pages), the right menu button toggles the left CRT's map (F3), and the
-left menu button recentres the view (`recenter` action, same as
-Shift+F12).
+(`native/gamepad.cfg`, `left-`/`right-` controls). By default the right
+hand flies (thumbstick = joystick, trigger = button 1 / cannon, grip =
+button 2 / missiles) and the left thumbstick's y is the throttle. The left
+trigger and grip are shift 1 and shift 2 for both hands; the trackpads are
+four-way pads (centre unused, hard to press) laid out like the cockpit:
+left = map zoom and waypoint select, shift 1 the left panel (autopilot,
+gear, flaps, brakes), shift 2 moves the waypoint (shift 2 + left menu =
+F8, change waypoint); right = TrackCam directions, shift 1 the right panel
+(ECM, bay, IR jammer, decoy), shift 2 ordnance select, flare, chaff. Menu
+buttons: left F3 / F7 / F8, right page cycle F4-F6-F10 / F2 HUD / F9 ILS.
+Left thumbstick click recentres the view (`recenter`, same as Shift+F12).
+The Xbox pad follows the same scheme (D-pad = left trackpad, Y/A/X/B =
+right trackpad).
 
 ## Not done
 

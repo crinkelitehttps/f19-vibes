@@ -57,6 +57,12 @@ bool Gamepad::load(const std::string& text, const std::string& source) {
         std::istringstream ls(line);
         std::string control, action, arg;
         if (!(ls >> control)) continue;
+        int layer = 0;
+        if (control == "shift1" || control == "shift2") {
+            layer = control[5] - '0';
+            control.clear();
+            ls >> control;
+        }
         ls >> action;
         std::vector<std::string> args;
         for (std::string a; ls >> a;) args.push_back(a);
@@ -73,7 +79,9 @@ bool Gamepad::load(const std::string& text, const std::string& source) {
             continue;
         }
 
+        if (control.empty()) { fail("missing control after shift prefix"); continue; }
         Binding b;
+        b.layer = layer;
         std::string name = control;
         if (name.size() > 1 && (name.back() == '-' || name.back() == '+')) {
             b.control.half = name.back() == '-' ? -1 : 1;
@@ -112,9 +120,14 @@ bool Gamepad::load(const std::string& text, const std::string& source) {
             if (!full_axis) { fail((action + " needs a stick or trackpad axis (e.g. leftx, right-thumbstick-y)").c_str()); continue; }
             if (arg == "invert" && args.size() == 1) b.invert = true;
             else if (!args.empty()) { fail(("unexpected '" + arg + "'").c_str()); continue; }
-        } else if (action == "button1" || action == "button2" || action == "key" || action == "cycle" || action == "recenter") {
+        } else if (action == "button1" || action == "button2" || action == "key" || action == "cycle" || action == "recenter" ||
+                   action == "shift1" || action == "shift2") {
             if (full_axis) { fail(("use " + control + "- or " + control + "+ to act as a button").c_str()); continue; }
-            if (action == "key" || action == "cycle") {
+            if (action == "shift1" || action == "shift2") {
+                b.action = Action::Shift;
+                b.layer = action[5] - '0';
+                if (!args.empty()) { fail(("unexpected '" + arg + "'").c_str()); continue; }
+            } else if (action == "key" || action == "cycle") {
                 b.action = action == "key" ? Action::Key : Action::Cycle;
                 if (action == "key" && args.size() != 1) { fail("expected one key, e.g. 'key shift+f1'"); continue; }
                 if (action == "cycle" && args.size() < 2) { fail("expected two or more keys, e.g. 'cycle f4 f5 f6'"); continue; }
@@ -145,6 +158,10 @@ bool Gamepad::load(const std::string& text, const std::string& source) {
             }
         } else {
             fail(action.empty() ? "missing action" : ("unknown action '" + action + "'").c_str());
+            continue;
+        }
+        if (layer && b.action != Action::Key && b.action != Action::Cycle && b.action != Action::Recenter) {
+            fail("only key, cycle and recenter bindings can be shifted");
             continue;
         }
         bindings_.push_back(b);
@@ -245,6 +262,19 @@ Gamepad::State Gamepad::update(uint64_t now_ns, const MotionControllers* vr) {
     State s;
     vr_ = vr;
     s.connected = pad_ || (vr && (vr->active[0] || vr->active[1]));
+    // Shift layer: 1 or 2 while that shift is held (3, both, has no bindings).
+    int layer = 0;
+    for (auto& b : bindings_)
+        if (b.action == Action::Shift && pressed(b.control)) layer |= b.layer;
+    // A key, cycle or recenter binding takes a fresh press in its own layer
+    // and then stays held until the control is released, whatever the
+    // shifts do meanwhile.
+    auto press = [&](Binding& b) {
+        bool raw = pressed(b.control);
+        bool p = b.held ? raw : raw && !b.was_down && layer == b.layer;
+        b.was_down = raw;
+        return p;
+    };
     for (auto& b : bindings_) {
         switch (b.action) {
             case Action::StickX: s.stick_x += b.invert ? -axis(b.control) : axis(b.control); break;
@@ -253,8 +283,9 @@ Gamepad::State Gamepad::update(uint64_t now_ns, const MotionControllers* vr) {
             case Action::LookY: s.look_y -= b.invert ? -axis(b.control) : axis(b.control); break;  // stick up looks up
             case Action::Button1: s.button[0] |= pressed(b.control); break;
             case Action::Button2: s.button[1] |= pressed(b.control); break;
+            case Action::Shift: break;
             case Action::Key: {
-                bool p = pressed(b.control);
+                bool p = press(b);
                 if (p && !b.held) {
                     key(b, true);
                     b.next_repeat_ns = now_ns + kRepeatDelayNs;
@@ -269,7 +300,7 @@ Gamepad::State Gamepad::update(uint64_t now_ns, const MotionControllers* vr) {
             }
             case Action::Cycle: {
                 // One key per press, the next one each time (no repeat).
-                bool p = pressed(b.control);
+                bool p = press(b);
                 if (p && !b.held) key(b, true);
                 else if (!p && b.held) {
                     key(b, false);
@@ -279,7 +310,7 @@ Gamepad::State Gamepad::update(uint64_t now_ns, const MotionControllers* vr) {
                 break;
             }
             case Action::Recenter: {
-                bool p = pressed(b.control);
+                bool p = press(b);
                 s.recenter |= p && !b.held;
                 b.held = p;
                 break;

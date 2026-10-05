@@ -63,7 +63,7 @@ private:
         int half = 0;   // axis as button: -1 / +1 (0: full axis, or trigger)
         bool full_axis() const;
     };
-    enum class Action { StickX, StickY, LookX, LookY, Button1, Button2, Key, Cycle, Recenter };
+    enum class Action { StickX, StickY, LookX, LookY, Button1, Button2, Key, Cycle, Recenter, Shift };
     struct Chord {
         SDL_Scancode sc = SDL_SCANCODE_UNKNOWN;
         SDL_Keymod mod = SDL_KMOD_NONE;
@@ -74,7 +74,11 @@ private:
         bool invert = false;
         std::vector<Chord> keys;  // Key: one; Cycle: pressed in turn
         size_t step = 0;          // Cycle: the key the next press sends
+        // Key, cycle, recenter: the shift layer it acts in (0 none, 1, 2).
+        // Shift: the shift it holds (1, 2).
+        int layer = 0;
         bool held = false;
+        bool was_down = false;    // the control, last update
         uint64_t next_repeat_ns = 0;
     };
     std::vector<Binding> bindings_;
