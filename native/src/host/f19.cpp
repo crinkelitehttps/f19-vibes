@@ -26,7 +26,8 @@
 // right stick is throttle and look left/right, other buttons press keys,
 // with the left trigger and bumper as two shift layers. In VR the motion
 // controllers do the same (right thumbstick, trigger and grip fly). Bindings: native/gamepad.cfg
-// (built in), overridden by ~/.config/f19/gamepad.cfg or --gamepad FILE.
+// (built in), overridden by ~/.config/f19/gamepad.cfg (%APPDATA%\f19\gamepad.cfg on
+// Windows) or --gamepad FILE.
 //
 // Sound: the PC speaker (ISOUND.EXE, chosen by the game for VGA) is
 // emulated and played through the default audio device. --volume F (0-1,
@@ -86,6 +87,15 @@
 #include "host/xr.h"
 #include "gamepad_cfg.h"
 
+#ifdef _WIN32
+// Laptops with switchable graphics: run on the discrete GPU (the one the
+// headset is plugged into).
+extern "C" {
+__declspec(dllexport) unsigned long NvOptimusEnablement = 1;
+__declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+}
+#endif
+
 using namespace f19;
 
 namespace {
@@ -132,11 +142,26 @@ void save_screenshot(GlRenderer& r, int w, int h, const HiresFrame* frame) {
     std::fprintf(stderr, "screenshot: %s.bmp\n", base.c_str());
 }
 
+// Per-user directories (with a trailing slash; empty if unknown): config
+// for the bindings, state for things kept between runs. Windows has one
+// for both, %APPDATA%\f19.
+std::string user_dir(bool state) {
+#ifdef _WIN32
+    const char* appdata = std::getenv("APPDATA");
+    return appdata && *appdata ? std::string(appdata) + "\\f19\\" : "";
+#else
+    const char* xdg = std::getenv(state ? "XDG_STATE_HOME" : "XDG_CONFIG_HOME");
+    const char* home = std::getenv("HOME");
+    return xdg && *xdg ? std::string(xdg) + "/f19/"
+         : home        ? std::string(home) + (state ? "/.local/state/f19/" : "/.config/f19/")
+                       : "";
+#endif
+}
+
 // Where the manual page being read is kept between runs.
 std::string manual_state_path() {
-    const char* xdg = std::getenv("XDG_STATE_HOME");
-    const char* home = std::getenv("HOME");
-    return xdg && *xdg ? std::string(xdg) + "/f19/manual-page" : home ? std::string(home) + "/.local/state/f19/manual-page" : "";
+    std::string dir = user_dir(true);
+    return dir.empty() ? "" : dir + "manual-page";
 }
 
 }  // namespace
@@ -188,8 +213,8 @@ int main(int argc, char** argv) {
     }
 
     Font font;
-    if (!load_psf("/usr/share/kbd/consolefonts/default8x16.psfu.gz", font))
-        std::fprintf(stderr, "warning: no console font found; text mode will be blank\n");
+    if (!load_builtin_font(font))
+        std::fprintf(stderr, "warning: the built-in console font is unreadable; text mode will be blank\n");
 
     Machine m(dir);
     m.trace = trace;
@@ -216,8 +241,10 @@ int main(int argc, char** argv) {
 
     // Under WSL, Mesa defaults to software rendering; use the GPU through
     // the D3D12 bridge when it is available (overridable).
+#ifndef _WIN32
     if (!std::getenv("GALLIUM_DRIVER") && SDL_GetPathInfo("/usr/lib/wsl/lib/libd3d12.so", nullptr))
         setenv("GALLIUM_DRIVER", "d3d12", 0);
+#endif
     // Gamepad input keeps working while the window is unfocused (in VR).
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
@@ -258,10 +285,8 @@ int main(int argc, char** argv) {
     {
         std::string path = gamepad_cfg, text = kDefaultGamepadCfg, source = "built-in gamepad.cfg";
         if (path.empty()) {
-            const char* xdg = std::getenv("XDG_CONFIG_HOME");
-            const char* home = std::getenv("HOME");
-            std::string user = xdg && *xdg ? std::string(xdg) + "/f19/gamepad.cfg"
-                             : home ? std::string(home) + "/.config/f19/gamepad.cfg" : "";
+            std::string user = user_dir(false);
+            if (!user.empty()) user += "gamepad.cfg";
             if (!user.empty() && SDL_GetPathInfo(user.c_str(), nullptr)) path = user;
         }
         if (!path.empty()) {

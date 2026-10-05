@@ -2,6 +2,7 @@
 // clipboard's controls pages.
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -14,5 +15,9 @@ struct Font {
 
 // Load a PSF1/PSF2 console font (gzip or plain).
 bool load_psf(const char* path, Font& font);
+// The same from memory.
+bool load_psf(const uint8_t* data, size_t size, Font& font);
+// The font built into f19 (native/data/default8x16.psfu.gz, from kbd).
+bool load_builtin_font(Font& font);
 
 }  // namespace f19

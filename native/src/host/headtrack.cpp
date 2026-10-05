@@ -1,39 +1,72 @@
 #include "host/headtrack.h"
 
 #include <SDL3/SDL.h>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 
 #include <cmath>
 #include <cstdio>
 
 namespace f19 {
 
+namespace {
+
+#ifdef _WIN32
+using Socket = SOCKET;
+void close_socket(Socket s) { closesocket(s); }
+#else
+using Socket = int;
+constexpr Socket INVALID_SOCKET = -1;
+void close_socket(Socket s) { close(s); }
+#endif
+
+}  // namespace
+
 HeadTracker::~HeadTracker() {
-    if (fd_ >= 0) close(fd_);
+    if (fd_ >= 0) close_socket(Socket(fd_));
 }
 
 bool HeadTracker::open(const char* addr, int port) {
-    fd_ = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0);
-    if (fd_ < 0) return false;
+#ifdef _WIN32
+    static bool wsa = [] {
+        WSADATA wd;
+        return WSAStartup(MAKEWORD(2, 2), &wd) == 0;
+    }();
+    if (!wsa) return false;
+#endif
+    Socket s = socket(AF_INET, SOCK_DGRAM, 0);
+    if (s == INVALID_SOCKET) return false;
+#ifdef _WIN32
+    u_long nonblocking = 1;
+    bool ok = ioctlsocket(s, FIONBIO, &nonblocking) == 0;
+#else
+    bool ok = fcntl(s, F_SETFL, fcntl(s, F_GETFL) | O_NONBLOCK) == 0;
+#endif
     sockaddr_in sa{};
     sa.sin_family = AF_INET;
     sa.sin_port = htons(uint16_t(port));
-    if (inet_pton(AF_INET, addr, &sa.sin_addr) != 1 || bind(fd_, reinterpret_cast<sockaddr*>(&sa), sizeof sa) < 0) {
-        close(fd_);
-        fd_ = -1;
+    if (!ok || inet_pton(AF_INET, addr, &sa.sin_addr) != 1 || bind(s, reinterpret_cast<sockaddr*>(&sa), sizeof sa) < 0) {
+        close_socket(s);
         return false;
     }
+    fd_ = intptr_t(s);
     return true;
 }
 
 HeadPose HeadTracker::poll() {
     if (fd_ < 0) return {};
     double d[6];
-    ssize_t n;
-    while ((n = recv(fd_, d, sizeof d, 0)) >= 0) {
+    int n;
+    while ((n = int(recv(Socket(fd_), reinterpret_cast<char*>(d), sizeof d, 0))) >= 0) {
         if (n != sizeof d) continue;
         bool ok = true;
         for (double v : d) ok = ok && std::isfinite(v);

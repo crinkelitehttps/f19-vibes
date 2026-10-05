@@ -42,7 +42,11 @@ public:
 
     // Logging of service calls (DOS/BIOS); set by the host.
     bool trace = false;
+#if defined(__GNUC__) || defined(__clang__)
     void log(const char* fmt, ...) __attribute__((format(printf, 2, 3)));
+#else
+    void log(const char* fmt, ...);
+#endif
 
     // Native callbacks. register_callback returns an id; make_stub writes
     // FE 38 id + `tail` bytes into the stub segment and returns its offset.

@@ -1,0 +1,32 @@
+# Windows build (MSVC): f19.exe as a downloadable artifact.
+name: windows
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: deps-${{ hashFiles('native/CMakeLists.txt') }}
+      - name: Configure
+        run: cmake -S native -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --target f19 f19trace sst_runner
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory pkg | Out-Null
+          Copy-Item build/f19.exe, build/f19trace.exe, native/gamepad.cfg pkg/
+          Copy-Item docs/windows.md pkg/README.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: f19-windows-x64
+          path: pkg/

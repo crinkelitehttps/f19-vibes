@@ -22,7 +22,7 @@ public:
     HeadPose poll();
 
 private:
-    int fd_ = -1;
+    intptr_t fd_ = -1;  // socket (a SOCKET on Windows)
     HeadPose pose_{};
     uint64_t last_ns_ = 0;
     bool announced_ = false;
