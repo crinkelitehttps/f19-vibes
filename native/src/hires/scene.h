@@ -35,6 +35,8 @@ struct SceneBody {
         bool poly;
         uint8_t plane;        // poly: plane index
         uint32_t mask;        // line: visible if mask & visible planes
+        bool ground = false;  // line: both ends at z = 0
+        bool outline = false; // line: along a polygon edge of the body
         uint8_t color;        // 0-15 (remapped), 255 = not drawn
         std::vector<uint8_t> v;   // poly: vertex loop; line: 2 vertices
     };
@@ -53,6 +55,12 @@ struct SceneNode {
 struct SceneShape {
     uint8_t size_class = 0;
     std::shared_ptr<const SceneNode> node;
+    // From the most detailed body: a ground decal (all vertices at z = 0),
+    // or terrain relief (a hill or ridge: few faces, raised, wide; its lines
+    // are ridges, faded with distance). `extent` in shape units.
+    bool flat = false;
+    bool relief = false;
+    float extent = 0;
 };
 
 struct SceneInstance {
@@ -92,6 +100,12 @@ private:
 
 struct SceneBuildParams {
     float lod_scale = 1.0f;   // > 1: keep detailed bodies farther away
+    float ground_lod = 8.0f;  // extra lod_scale for ground decals (runways, roads, fields)
+    // Line widths (see HiresPrim::LineStyle); classic: all Screen.
+    bool classic_lines = false;
+    float road_width = 40.0f;   // world units (feet): free lines on ground decals
+    float edge_width = 1.0f;    // shape units: outlines and object edges
+    float relief_extent = 2048; // world units: wider raised terrain shapes are relief
     float lights_range = 0x2400;  // ground lights beyond this depth are dropped (engine: ~2 tiles)
 };
 

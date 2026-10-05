@@ -45,7 +45,12 @@
 //
 // Usage: f19 [GAMEDIR] [--scale N] [--mips N] [--msaa N] [--vga-hz HZ] [--headtrack-port N] [--headtrack-bind ADDR]
 //            [--trace] [--original-driver] [--verify-driver] [--lowres] [--lod-detail F] [--terrain-radius N]
+//            [--classic-lines] [--road-width FEET]
 //            [--vr] [--vr-scale F] [--gamepad FILE] [--volume F] [--no-sound] [--raw-speaker] [--manual FILE]
+//   --classic-lines: every line at one screen width, as the original
+//   (Alt+F11 toggles). Otherwise roads and markings are drawn in perspective
+//   (--road-width FEET, default 40), object edges scale with distance, and
+//   mountain ridges thin and fade with distance.
 //   --lod-detail F: > 1 keeps detailed models farther away (default 1 =
 //   switch at the same on-screen size as the original). --terrain-radius N:
 //   terrain tiles drawn in every direction per level (default 6).
@@ -150,6 +155,8 @@ int main(int argc, char** argv) {
     bool trace = false, original_driver = false, verify_driver = false, lowres = false, no_depth = false;
     float lod_detail = 1.0f;
     int terrain_radius = 6;
+    bool classic_lines = false;
+    float road_width = 40.0f;
     std::string gamepad_cfg, manual_pdf;
     bool sound = true, raw_speaker = false;
     float volume = 0.5f;
@@ -168,6 +175,8 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--headtrack-bind") && i + 1 < argc) headtrack_bind = argv[++i];
         else if (!std::strcmp(argv[i], "--lod-detail") && i + 1 < argc) lod_detail = float(std::atof(argv[++i]));
         else if (!std::strcmp(argv[i], "--terrain-radius") && i + 1 < argc) terrain_radius = std::max(1, std::atoi(argv[++i]));
+        else if (!std::strcmp(argv[i], "--classic-lines")) classic_lines = true;
+        else if (!std::strcmp(argv[i], "--road-width") && i + 1 < argc) road_width = float(std::atof(argv[++i]));
         else if (!std::strcmp(argv[i], "--vr")) vr = true;
         else if (!std::strcmp(argv[i], "--vr-scale") && i + 1 < argc) vr_scale = float(std::atof(argv[++i]));
         else if (!std::strcmp(argv[i], "--gamepad") && i + 1 < argc) gamepad_cfg = argv[++i];
@@ -230,6 +239,8 @@ int main(int argc, char** argv) {
     GlRenderer renderer;
     renderer.msaa = msaa > 0 ? msaa : vr ? 4 : 8;
     renderer.lod_detail = lod_detail;
+    renderer.classic_lines = classic_lines;
+    renderer.road_width = road_width;
     renderer.depth = !no_depth;
     if (!renderer.init()) std::fprintf(stderr, "warning: renderer initialisation reported a GL error\n");
     XrOutput xr;
@@ -301,6 +312,7 @@ int main(int argc, char** argv) {
             "",
             row("F11", "3D cockpit / original flat screen", ""),
             row("Shift+F11", "native world / engine primitives", ""),
+            row("Alt+F11", "perspective / classic lines", ""),
             row("F12", "screenshot", ""),
             row("Shift+F12", "VR: recentre the view", ""),
             row("Right drag", "look around", ""),
@@ -464,9 +476,12 @@ int main(int argc, char** argv) {
             if (ev.type == SDL_EVENT_KEY_UP && ev.key.scancode == SDL_SCANCODE_F12) continue;
             if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.scancode == SDL_SCANCODE_F11 && !ev.key.repeat) {
                 // F11: 3D / flat; Shift+F11: native world / engine's
-                // primitives; Ctrl+F11: the manual.
+                // primitives; Ctrl+F11: the manual; Alt+F11: classic lines.
                 if (ev.key.mod & SDL_KMOD_CTRL) {
                     toggle_manual();
+                } else if (ev.key.mod & SDL_KMOD_ALT) {
+                    renderer.classic_lines = !renderer.classic_lines;
+                    std::fprintf(stderr, "lines: %s\n", renderer.classic_lines ? "classic" : "perspective");
                 } else if (ev.key.mod & SDL_KMOD_SHIFT) {
                     renderer.native_world = !renderer.native_world;
                     std::fprintf(stderr, "world: %s\n", renderer.native_world ? "native scene" : "engine primitives");

@@ -262,6 +262,32 @@ detail F times farther). Ground lights are dropped beyond depth 0x2400
 painter order (level 4 to 1, far tiles first); the rest are depth-tested.
 Building the scene takes about 0.2-0.4 ms per frame (~1500 instances).
 
+Lines (`HiresPrim::LineStyle`; `--classic-lines` or Alt+F11 for the
+original's one screen width). The engine draws every line one pixel wide at
+320x200, so at high resolution roads are chunky far away and thin up close,
+and distant mountain ranges become a tangle of ridge lines. The scene
+classifies each line from the shape data (all four theatres checked):
+
+- Ground: both ends at z = 0 (roads, runway borders, site outlines). Drawn
+  as a strip in the shape's ground plane: free lines on ground decals (roads)
+  `--road-width` feet wide (default 40), lines along a polygon edge
+  (runway borders) and other ground lines 1 shape unit wide.
+- Relief: lines of raised terrain shapes with at most 5 faces whose extent
+  is at least 2048 world units, placed at level 2+ (the hill/ridge shapes:
+  NC 3/4, LB 9/10, PG 10/11, CE 3), and their far bodies. Screen width up to
+  25k units, thinning to the minimum and fading to 50% by 200k (mountains
+  are typically 50-100k away).
+- Edge: everything else (sites, buildings, aircraft): 1 shape unit wide,
+  facing the camera.
+
+Ground and edge lines stay at least 1.25 px wide (at 1080 rows) and fade in
+proportion below that, to 25%; opacity uses the width facing the camera, so
+a road seen at a grazing angle is thin but still visible. Ground decals
+(runways, roads, fields) also keep their detailed bodies 8x farther
+(`SceneBuildParams::ground_lod`): their far bodies are crude (a runway
+becomes one line) and cost little. `f19trace -H` writes
+`.cockpit3d-classic.ppm` / `.cockpit3d-left-classic.ppm` for comparison.
+
 Not yet native: the far "dot" the engine draws in 2D for distant list
 objects (stays on the HUD layer), the carrier wake, smoke and other
 non-shape effects.

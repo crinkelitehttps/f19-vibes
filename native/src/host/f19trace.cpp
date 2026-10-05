@@ -246,8 +246,10 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "scene: instances per level: dynamic %zu, L1 %zu, L2 %zu, L3 %zu, L4 %zu\n", lv[0], lv[1], lv[2], lv[3], lv[4]);
                 std::fprintf(stderr, "scene: build %.2f ms -> %zu polys, %zu lines, %zu dots\n", ms, kinds[0], kinds[1], kinds[2]);
             }
-            struct Shot { const char* suffix; HeadPose head; bool native; };
-            for (auto [suffix, head, native] : {Shot{".cockpit3d.ppm", HeadPose{}, true},
+            struct Shot { const char* suffix; HeadPose head; bool native; bool classic = false; };
+            for (auto [suffix, head, native, classic] : {Shot{".cockpit3d.ppm", HeadPose{}, true},
+                                                Shot{".cockpit3d-classic.ppm", HeadPose{}, true, true},
+                                                Shot{".cockpit3d-left-classic.ppm", HeadPose{-1.4f, -0.1f}, true, true},
                                                 Shot{".cockpit3d-captured.ppm", HeadPose{}, false},
                                                 Shot{".cockpit3d-look.ppm", HeadPose{0.35f, -0.15f}, true},
                                                 Shot{".cockpit3d-left.ppm", HeadPose{-1.4f, -0.1f}, true},
@@ -255,6 +257,7 @@ int main(int argc, char** argv) {
                                                 Shot{".cockpit3d-lean.ppm", HeadPose{0.2f, -0.3f, 0.25f, 8, 0, -15}, true}, Shot{".eyeL.ppm", HeadPose{0, 0, 0, -3.2f, 0, 0}, true}, Shot{".eyeR.ppm", HeadPose{0, 0, 0, 3.2f, 0, 0}, true}}) {
                 GLuint tex;
                 gr.native_world = native;
+                gr.classic_lines = classic;
                 if (gr.render_cockpit3d(*frame, 1280, 720, head, &tex)) {
                     auto rgb = gr.read_rgb(tex, 1280, 720);
                     FILE* fo = std::fopen((hires_shot + suffix).c_str(), "wb");

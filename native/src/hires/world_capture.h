@@ -43,6 +43,16 @@ struct HiresPrim {
     uint8_t color2 = 0;      // horizon: ground colour
     uint32_t object = 0;     // shape instance the primitive belongs to
     int8_t flat = -1;        // 1: ground decal (no depth write), 0: solid, -1: decide from geometry
+    // Line: how its width is chosen (native scene; captured lines are
+    // Screen). Screen: fixed width in 320x200 pixels, as the engine draws.
+    // Ground: a strip `width` wide (camera-space units) lying in the plane
+    // with normal `normal` (roads, markings). Edge: `width` wide facing the
+    // camera (object outlines). Relief: screen width, thinning and fading
+    // with distance (mountain ridges). Ground and Edge keep a minimum
+    // on-screen width and fade out below it.
+    enum LineStyle : uint8_t { Screen, Ground, Edge, Relief } line_style = Screen;
+    float width = 0;
+    std::array<float, 3> normal = {0, 0, 0};
     HiresProj proj;
     std::vector<std::array<float, 3>> v;  // camera space (x right, y up, z forward)
     // Horizon: screen-space line point M, sky direction U (local coords),

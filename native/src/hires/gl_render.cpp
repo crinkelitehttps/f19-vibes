@@ -556,12 +556,15 @@ GLuint GlRenderer::render_view(const HiresFrame& f, int w, int h, const EyeView&
         // The engine's LOD distances suit its 256-pixel focal length; scale
         // them to ours so models switch at the same on-screen size.
         sp.lod_scale = std::max(1.0f, fx / 256.0f) * lod_detail;
+        sp.classic_lines = classic_lines;
+        sp.road_width = road_width;
         // Both eyes of a stereo frame share the build.
-        if (&f != scene_frame_ || f.time_us != scene_time_ || sp.lod_scale != scene_lod_) {
+        if (&f != scene_frame_ || f.time_us != scene_time_ || sp.lod_scale != scene_lod_ || classic_lines != scene_classic_) {
             build_scene_prims(*f.scene, sp, scene_prims_);
             scene_frame_ = &f;
             scene_time_ = f.time_us;
             scene_lod_ = sp.lod_scale;
+            scene_classic_ = classic_lines;
         }
         prims = &scene_prims_;
     }
@@ -582,6 +585,18 @@ GLuint GlRenderer::render_view(const HiresFrame& f, int w, int h, const EyeView&
         return P2{cx + fx * v[0] / v[2], cy - fy * v[1] / v[2], kNearZ / v[2]};
     };
     const float lw = std::max(1.0f, line_width * float(w) / 320.0f);
+    const float min_hw = 0.5f * line_min_px * std::max(1.0f, float(h) / 1080.0f);
+    // On-screen width of a view-space displacement s at point q, across the
+    // screen direction (ux, uy) of the line.
+    auto across = [&](const std::array<float, 3>& q, const std::array<float, 3>& s, float ux, float uy) {
+        float dx = fx * (s[0] * q[2] - q[0] * s[2]) / (q[2] * q[2]);
+        float dy = -fy * (s[1] * q[2] - q[1] * s[2]) / (q[2] * q[2]);
+        return std::fabs(-uy * dx + ux * dy);
+    };
+    auto smooth = [](float a, float b, float x) {
+        float t = std::clamp((x - a) / (b - a), 0.0f, 1.0f);
+        return t * t * (3 - 2 * t);
+    };
     for (const HiresPrim& p : *prims) {
         if (!(p.proj.ox == 0 && p.proj.oy == 0 && p.proj.vp_w >= 320)) continue;  // sub-views live on the panel
         if (p.kind == HiresPrim::Horizon) continue;                              // sky shader instead
@@ -607,12 +622,71 @@ GLuint GlRenderer::render_view(const HiresFrame& f, int w, int h, const EyeView&
                     (ain ? b : a) = m;
                 }
                 P2 pa = project(a), pb = project(b);
-                float dx = pb.x - pa.x, dy = pb.y - pa.y, len = std::sqrt(dx * dx + dy * dy), hw = lw * 0.5f;
-                float tx, ty, nx, ny;
-                if (len < 1e-3f) { tx = hw; ty = 0; nx = 0; ny = hw; }
-                else { tx = dx / len * hw; ty = dy / len * hw; nx = -ty; ny = tx; }
-                tri_fan({{pa.x - tx + nx, pa.y - ty + ny, pa.d}, {pb.x + tx + nx, pb.y + ty + ny, pb.d},
-                         {pb.x + tx - nx, pb.y + ty - ny, pb.d}, {pa.x - tx - nx, pa.y - ty - ny, pa.d}}, color(p.color));
+                float dx = pb.x - pa.x, dy = pb.y - pa.y, len = std::sqrt(dx * dx + dy * dy);
+                float ux = len < 1e-3f ? 1.0f : dx / len, uy = len < 1e-3f ? 0.0f : dy / len;
+                // Half widths and opacity at each end.
+                float hwa = lw * 0.5f, hwb = hwa, ala = 1, alb = 1;
+                bool exact = false;  // Ground: draw the strip itself
+                std::array<float, 3> side{};
+                if (p.line_style == HiresPrim::Ground || p.line_style == HiresPrim::Edge) {
+                    float ta, tb;
+                    if (p.line_style == HiresPrim::Ground) {
+                        std::array<float, 3> d = {b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+                        auto n = V.mul(p.normal);
+                        side = {d[1] * n[2] - d[2] * n[1], d[2] * n[0] - d[0] * n[2], d[0] * n[1] - d[1] * n[0]};
+                        float sl = std::sqrt(side[0] * side[0] + side[1] * side[1] + side[2] * side[2]);
+                        for (auto& c : side) c = sl > 0 ? c / sl * 0.5f * p.width : 0;
+                        ta = across(a, side, ux, uy);
+                        tb = across(b, side, ux, uy);
+                    } else {
+                        ta = 0.5f * p.width * fx / a[2];
+                        tb = 0.5f * p.width * fx / b[2];
+                    }
+                    exact = p.line_style == HiresPrim::Ground && ta >= min_hw && tb >= min_hw;
+                    hwa = std::max(ta, min_hw);
+                    hwb = std::max(tb, min_hw);
+                    // Opacity from the width facing the camera: a road seen
+                    // at a grazing angle is thin but still visible.
+                    float fa = 0.5f * p.width * fx / a[2], fb = 0.5f * p.width * fx / b[2];
+                    ala = std::clamp(fa / min_hw, line_fade_floor, 1.0f);
+                    alb = std::clamp(fb / min_hw, line_fade_floor, 1.0f);
+                } else if (p.line_style == HiresPrim::Relief) {
+                    const float wu = 65536.0f;
+                    float sa = smooth(relief_near * wu, relief_far * wu, a[2]), sb = smooth(relief_near * wu, relief_far * wu, b[2]);
+                    hwa = std::max(min_hw, hwa + (min_hw - hwa) * sa);
+                    hwb = std::max(min_hw, hwb + (min_hw - hwb) * sb);
+                    ala = 1 + (relief_alpha - 1) * sa;
+                    alb = 1 + (relief_alpha - 1) * sb;
+                }
+                auto ca = color(p.color), cb = ca;
+                ca[3] = ala;
+                cb[3] = alb;
+                if (exact) {
+                    // The strip in view space, clipped at the near plane
+                    // (its ends were clipped as a line above; good enough
+                    // for a strip a few metres wide).
+                    std::vector<std::array<float, 3>> q = {
+                        {a[0] - side[0], a[1] - side[1], a[2] - side[2]}, {b[0] - side[0], b[1] - side[1], b[2] - side[2]},
+                        {b[0] + side[0], b[1] + side[1], b[2] + side[2]}, {a[0] + side[0], a[1] + side[1], a[2] + side[2]}};
+                    auto clipped = clip_near(q);
+                    if (clipped.size() >= 3) {
+                        std::vector<P2> pts;
+                        for (auto& v : clipped) pts.push_back(project(v));
+                        tri_fan(pts, ca);
+                    }
+                } else {
+                    // A band across the screen line, each end its own width;
+                    // extended by its half width at the ends (square caps).
+                    float nx = -uy, ny = ux;
+                    P2 a0{pa.x - ux * hwa + nx * hwa, pa.y - uy * hwa + ny * hwa, pa.d};
+                    P2 a1{pa.x - ux * hwa - nx * hwa, pa.y - uy * hwa - ny * hwa, pa.d};
+                    P2 b0{pb.x + ux * hwb + nx * hwb, pb.y + uy * hwb + ny * hwb, pb.d};
+                    P2 b1{pb.x + ux * hwb - nx * hwb, pb.y + uy * hwb - ny * hwb, pb.d};
+                    auto put = [&](const P2& v, const std::array<float, 4>& c) {
+                        verts_.push_back({v.x, v.y, v.d, c[0], c[1], c[2], c[3]});
+                    };
+                    put(a0, ca), put(b0, cb), put(b1, cb), put(a0, ca), put(b1, cb), put(a1, ca);
+                }
             }
         } else if (p.kind == HiresPrim::Dot) {
             if (vv[0][2] >= kNearZ) {
@@ -659,7 +733,10 @@ GLuint GlRenderer::render_view(const HiresFrame& f, int w, int h, const EyeView&
     BindVertexArray(vao_);
     BindBuffer(GL_ARRAY_BUFFER, vbo_);
     BufferData(GL_ARRAY_BUFFER, GLsizeiptr(verts_.size() * sizeof(Vert)), verts_.data(), GL_STREAM_DRAW);
+    Enable(GL_BLEND);  // faded lines
+    BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     draw_groups();
+    Disable(GL_BLEND);
 
     // Cockpit surfaces' transform: perspective (same focal as the world) *
     // aircraft->view rotation * eye offset (head position; z back +,

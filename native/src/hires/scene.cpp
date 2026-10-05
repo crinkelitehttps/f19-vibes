@@ -34,6 +34,19 @@ std::shared_ptr<const SceneShape> ShapeCache::get(const Memory& mem, uint32_t li
     uint16_t seg = uint16_t(linear >> 4), off = uint16_t(linear & 15);
     s->size_class = mem.read8(linear);
     s->node = node(mem, Memory::linear(seg, uint16_t(off + 1)), sh, 0);
+    const SceneNode* n = s->node.get();
+    while (n && !n->body) n = n->near_node.get();
+    if (n && n->body && n->body->kind == SceneBody::Mesh && !n->body->verts.empty()) {
+        const SceneBody& b = *n->body;
+        float lo[3] = {1e9f, 1e9f, 1e9f}, hi[3] = {-1e9f, -1e9f, -1e9f};
+        for (auto& v : b.verts)
+            for (int i = 0; i < 3; i++) lo[i] = std::min(lo[i], v[i]), hi[i] = std::max(hi[i], v[i]);
+        int polys = 0;
+        for (auto& p : b.prims) polys += p.poly;
+        s->flat = b.flat;
+        s->extent = std::max(hi[0] - lo[0], hi[1] - lo[1]);
+        s->relief = !b.flat && polys <= 5 && hi[2] > 0;
+    }
     shapes_[linear] = s;
     return s;
 }
@@ -180,6 +193,22 @@ std::shared_ptr<const SceneBody> ShapeCache::body(const Memory& mem, uint32_t li
         }
         bd->flat = !bd->verts.empty();
         for (auto& v : bd->verts) bd->flat = bd->flat && v[2] == 0;
+        // Lines on the ground plane, and lines that outline a polygon (a
+        // runway's border) rather than standing alone (a road).
+        auto same = [&](uint8_t a, uint8_t b) {
+            return bd->verts[a] == bd->verts[b];
+        };
+        for (auto& p : bd->prims) {
+            if (p.poly) continue;
+            p.ground = bd->verts[p.v[0]][2] == 0 && bd->verts[p.v[1]][2] == 0;
+            for (const auto& q : bd->prims) {
+                if (!q.poly) continue;
+                for (size_t i = 0; i < q.v.size() && !p.outline; i++) {
+                    uint8_t a = q.v[i], b = q.v[(i + 1) % q.v.size()];
+                    p.outline = (same(a, p.v[0]) && same(b, p.v[1])) || (same(a, p.v[1]) && same(b, p.v[0]));
+                }
+            }
+        }
     }
     bodies_[linear] = bd;
     return bd;
@@ -266,7 +295,12 @@ void build_scene_prims(const Scene& s, const SceneBuildParams& bp, std::vector<H
         auto o = cam_of(s.view, rel[0], rel[1], rel[2]);
         // Level of detail: the engine's distance estimate and thresholds,
         // scaled for our resolution.
-        float dist = (std::fabs(o[2]) + (std::fabs(o[0]) + std::fabs(o[1])) * 0.25f) / sz / bp.lod_scale;
+        // Ground decals are cheap and their far bodies crude (a runway
+        // becomes one line), so they keep detail farther.
+        const bool decal = in.level > 0 && in.shape->flat;
+        float dist = (std::fabs(o[2]) + (std::fabs(o[0]) + std::fabs(o[1])) * 0.25f) / sz / bp.lod_scale /
+                     (decal ? bp.ground_lod : 1.0f);
+        const bool relief = in.level >= 2 && in.shape->relief && in.shape->extent * sz * in.scale >= bp.relief_extent;
         const SceneNode* n = in.shape->node.get();
         while (n && !n->body) n = (dist > float(s.lod_table[n->lod_level & 7]) ? n->far_node : n->near_node).get();
         if (!n || !n->body) continue;
@@ -346,12 +380,25 @@ void build_scene_prims(const Scene& s, const SceneBuildParams& bp, std::vector<H
         }
         std::vector<std::array<float, 3>> cv(b.verts.size());
         for (size_t i = 0; i < b.verts.size(); i++) cv[i] = vert(b.verts[i]);
+        const auto up = cam_of(C, 0, 0, 1);  // the shape's ground-plane normal
         for (const auto& pr : b.prims) {
             if (pr.poly ? !(visible & (1u << (pr.plane & 31))) : !(visible & pr.mask)) continue;
             HiresPrim p = base;
             p.kind = pr.poly ? HiresPrim::Poly : HiresPrim::Line;
             p.color = uint8_t(s.remap[pr.color & 15] + shade);
             for (uint8_t v : pr.v) p.v.push_back(cv[v]);
+            if (!pr.poly && !bp.classic_lines) {
+                if (relief) {
+                    p.line_style = HiresPrim::Relief;
+                } else if (pr.ground) {
+                    p.line_style = HiresPrim::Ground;
+                    p.normal = up;
+                    p.width = b.flat && !pr.outline ? bp.road_width * 65536.0f : bp.edge_width * sz * k;
+                } else {
+                    p.line_style = HiresPrim::Edge;
+                    p.width = bp.edge_width * sz * k;
+                }
+            }
             out.push_back(std::move(p));
         }
     }

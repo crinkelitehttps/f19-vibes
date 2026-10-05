@@ -49,6 +49,17 @@ public:
     // own level of detail) instead of the engine's captured primitives.
     bool native_world = true;
     float lod_detail = 1.0f;     // > 1 keeps detailed models farther away
+    // Native scene lines (HiresPrim::LineStyle). classic_lines: all at
+    // line_width, as the original. Otherwise roads and markings are strips
+    // on the ground and object edges have a width in the world; both stay at
+    // least line_min_px wide (window pixels at 1080 rows) and fade out in
+    // proportion below it, to no less than line_fade_floor. Mountain ridges
+    // keep line_width up to relief_near (world units), then thin to the
+    // minimum and fade to relief_alpha by relief_far.
+    bool classic_lines = false;
+    float line_min_px = 1.25f, line_fade_floor = 0.25f;
+    float relief_near = 25000.0f, relief_far = 200000.0f, relief_alpha = 0.5f;
+    float road_width = 40.0f;    // world units (feet)
 
     // Composited frame at w x h; returns a texture valid until the next call.
     GLuint render_frame(const HiresFrame& f, int w, int h);
@@ -118,6 +129,7 @@ private:
     const HiresFrame* scene_frame_ = nullptr;  // scene_prims_ built for (frame, time, lod)
     uint64_t scene_time_ = 0;
     float scene_lod_ = 0;
+    bool scene_classic_ = false;
 
     GLuint world_prog_ = 0, tex_prog_ = 0;
     GLint world_size_loc_ = -1, tex_rect_loc_ = -1, tex_sampler_loc_ = -1;
