@@ -13,6 +13,15 @@ namespace fs = std::filesystem;
 
 namespace {
 
+// fopen for a host path (wide on Windows).
+std::FILE* open_file(const fs::path& p, const char* mode) {
+#ifdef _WIN32
+    return _wfopen(p.c_str(), fs::path(mode).c_str());
+#else
+    return std::fopen(p.c_str(), mode);
+#endif
+}
+
 std::string upper(std::string s) {
     for (auto& c : s) c = char(std::toupper(uint8_t(c)));
     return s;
@@ -517,8 +526,8 @@ void Dos::int21() {
             fs::path p = resolve(name, ah == 0x3D);
             std::FILE* f = nullptr;
             if (!p.empty()) {
-                if (ah == 0x3C) f = std::fopen(p.c_str(), "w+b");
-                else f = std::fopen(p.c_str(), (al & 3) == 0 ? "rb" : "r+b");
+                if (ah == 0x3C) f = open_file(p, "w+b");
+                else f = open_file(p, (al & 3) == 0 ? "rb" : "r+b");
             }
             if (!f) {
                 m_.log("DOS %s %s: not found\n", ah == 0x3C ? "create" : "open", name.c_str());

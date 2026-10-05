@@ -68,7 +68,7 @@ struct WglInterop {
     }
 };
 
-template <class T> void release(T*& p) {
+template <class T> void com_release(T*& p) {
     if (p) p->Release();
     p = nullptr;
 }
@@ -168,14 +168,14 @@ bool XrOutput::Impl::make_device() {
             std::fprintf(stderr, "openxr: headset GPU: %s\n", name);
             break;
         }
-        release(adapter);
+        com_release(adapter);
     }
-    release(factory);
+    com_release(factory);
     const D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0};
     D3D_FEATURE_LEVEL got{};
     HRESULT hr = D3D11CreateDevice(adapter, adapter ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, levels,
                                    UINT(std::size(levels)), D3D11_SDK_VERSION, &device, &got, &context);
-    release(adapter);
+    com_release(adapter);
     if (FAILED(hr) || got < reqs.minFeatureLevel) {
         std::fprintf(stderr, "openxr: cannot create a Direct3D 11 device (0x%08lx)\n", (unsigned long)hr);
         return false;
@@ -429,7 +429,7 @@ XrOutput::~XrOutput() {
 #ifdef _WIN32
         // (The GL context may be gone already: SDL is shut down first.)
         if (sc->interop && wglGetCurrentContext()) d.wgl.UnregisterObject(d.interop_device, sc->interop);
-        release(sc->shared);
+        com_release(sc->shared);
 #endif
         if (sc->handle) xrDestroySwapchain(sc->handle);
     }
@@ -440,8 +440,8 @@ XrOutput::~XrOutput() {
     if (d.instance) xrDestroyInstance(d.instance);
 #ifdef _WIN32
     if (d.interop_device && wglGetCurrentContext()) d.wgl.CloseDevice(d.interop_device);
-    release(d.context);
-    release(d.device);
+    com_release(d.context);
+    com_release(d.device);
 #endif
 }
 
