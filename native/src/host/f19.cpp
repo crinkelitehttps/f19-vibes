@@ -27,11 +27,16 @@
 // controllers can do the same (right thumbstick, trigger and grip fly). Bindings: native/gamepad.cfg
 // (built in), overridden by ~/.config/f19/gamepad.cfg or --gamepad FILE.
 //
+// Sound: the PC speaker (ISOUND.EXE, chosen by the game for VGA) is
+// emulated and played through the default audio device. --volume F (0-1,
+// default 0.5), --no-sound, --raw-speaker (no speaker-cone response, just
+// the ideal 1-bit signal band-limited).
+//
 // Set F19_PERF=1 for a once-a-second timing summary.
 //
 // Usage: f19 [GAMEDIR] [--scale N] [--mips N] [--msaa N] [--vga-hz HZ] [--headtrack-port N] [--headtrack-bind ADDR]
 //            [--trace] [--original-driver] [--verify-driver] [--lowres] [--lod-detail F] [--terrain-radius N]
-//            [--vr] [--vr-scale F] [--gamepad FILE]
+//            [--vr] [--vr-scale F] [--gamepad FILE] [--volume F] [--no-sound] [--raw-speaker]
 //   --lod-detail F: > 1 keeps detailed models farther away (default 1 =
 //   switch at the same on-screen size as the original). --terrain-radius N:
 //   terrain tiles drawn in every direction per level (default 6).
@@ -45,6 +50,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <mutex>
 #include <thread>
 #include <ctime>
@@ -162,6 +168,8 @@ int main(int argc, char** argv) {
     float lod_detail = 1.0f;
     int terrain_radius = 6;
     std::string gamepad_cfg;
+    bool sound = true, raw_speaker = false;
+    float volume = 0.5f;
     for (int i = 1; i < argc; i++) {
         if (!std::strcmp(argv[i], "--scale") && i + 1 < argc) scale = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--mips") && i + 1 < argc) mips = std::atof(argv[++i]);
@@ -180,6 +188,9 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--vr")) vr = true;
         else if (!std::strcmp(argv[i], "--vr-scale") && i + 1 < argc) vr_scale = float(std::atof(argv[++i]));
         else if (!std::strcmp(argv[i], "--gamepad") && i + 1 < argc) gamepad_cfg = argv[++i];
+        else if (!std::strcmp(argv[i], "--volume") && i + 1 < argc) volume = std::clamp(float(std::atof(argv[++i])), 0.0f, 1.0f);
+        else if (!std::strcmp(argv[i], "--no-sound")) sound = false;
+        else if (!std::strcmp(argv[i], "--raw-speaker")) raw_speaker = true;
         else dir = argv[i];
     }
 
@@ -291,6 +302,25 @@ int main(int argc, char** argv) {
     m.vga_refresh_hz = vga_hz;
     std::fprintf(stderr, "emulated CPU %.0f MIPS, VGA refresh %.2f Hz\n", mips, vga_hz);
 
+    // PC speaker output. Samples are made in emulated time on the emulation
+    // thread; the queue is held near kAudioTargetMs by nudging the playback
+    // rate (the emulation follows the host clock, the device its own).
+    SDL_AudioStream* audio = nullptr;
+    if (sound) {
+        SDL_AudioSpec spec{SDL_AUDIO_F32, 1, PcSpeaker::kRate};
+        if (SDL_InitSubSystem(SDL_INIT_AUDIO))
+            audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
+        if (audio) {
+            SDL_ResumeAudioStreamDevice(audio);
+            m.speaker.enabled = true;
+            m.speaker.volume = volume;
+            m.speaker.speaker_filter = !raw_speaker;
+        } else {
+            std::fprintf(stderr, "warning: no audio output: %s\n", SDL_GetError());
+        }
+    }
+    constexpr int kAudioTargetMs = 50;
+
     // Emulation runs on its own thread against a real-time clock, in slices
     // of about 1 ms of emulated time; the main thread handles input and
     // renders snapshots. `mtx` guards the machine.
@@ -308,6 +338,9 @@ int main(int argc, char** argv) {
         const uint64_t max_lag = uint64_t(m.ips_per_ms) * 250;
         auto base_t = clk::now();
         uint64_t base_i = m.cpu.instructions;
+        std::vector<float> pcm;
+        const int audio_target = PcSpeaker::kRate * kAudioTargetMs / 1000;
+        float ratio = 1;
         while (!quit) {
             auto now = clk::now();
             double ms = std::chrono::duration<double, std::milli>(now - base_t).count();
@@ -328,6 +361,24 @@ int main(int argc, char** argv) {
                     perf_busy_ns += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(clk::now() - t0).count());
                     behind = m.cpu.instructions < target;
                 }
+                if (audio) {
+                    m.speaker.advance(m.pit_ticks());
+                    pcm.swap(m.speaker.samples);
+                    m.speaker.samples.clear();
+                }
+            }
+            if (audio && !pcm.empty()) {
+                int queued = SDL_GetAudioStreamQueued(audio) / int(sizeof(float));
+                if (queued == 0 || queued > 4 * audio_target) {   // start, underrun or far behind: restart at the target
+                    SDL_ClearAudioStream(audio);
+                    std::vector<float> silence(audio_target);
+                    SDL_PutAudioStreamData(audio, silence.data(), int(silence.size() * sizeof(float)));
+                    queued = audio_target;
+                }
+                float want = 1 + std::clamp(float(queued - audio_target) / audio_target * 0.005f, -0.005f, 0.005f);
+                if (std::abs(want - ratio) > 0.0005f) SDL_SetAudioStreamFrequencyRatio(audio, ratio = want);
+                SDL_PutAudioStreamData(audio, pcm.data(), int(pcm.size() * sizeof(float)));
+                pcm.clear();
             }
             if (!behind) std::this_thread::sleep_for(std::chrono::microseconds(300));
         }
@@ -567,6 +618,7 @@ int main(int argc, char** argv) {
     }
     quit = true;
     emu.join();
+    if (audio) SDL_DestroyAudioStream(audio);
     if (m.exited) std::fprintf(stderr, "stopped: %s\n", m.stop_reason.c_str());
     if (verify_driver) std::fprintf(stderr, "%s", native_gfx.report().c_str());
     SDL_Quit();

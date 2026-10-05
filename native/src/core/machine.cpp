@@ -414,7 +414,8 @@ void Machine::block_and_retry() {
 void Machine::setup_ports() {
     // PIT channel 0: counts down at 1.193182 MHz in virtual time.
     port_out[0x43] = [this](uint8_t v) {
-        if ((v >> 6) != 0) return;            // only channel 0 is modelled
+        if ((v >> 6) == 2) speaker.pit_control(pit_ticks(), v);
+        if ((v >> 6) != 0) return;            // channel 0 here; channel 2 is the speaker's
         if (((v >> 4) & 3) == 0) {            // counter latch command
             pit_latched_ = true;
             pit_latch_value_ = pit_count();
@@ -443,9 +444,9 @@ void Machine::setup_ports() {
         pit_read_phase_ ^= 1;
         return out;
     };
-    port_out[0x42] = [](uint8_t) {};
-    port_in[0x61] = []() -> uint8_t { return 0x00; };
-    port_out[0x61] = [](uint8_t) {};
+    port_out[0x42] = [this](uint8_t v) { speaker.pit_data(pit_ticks(), v); };
+    port_in[0x61] = [this]() -> uint8_t { return speaker.port61_read(pit_ticks()); };
+    port_out[0x61] = [this](uint8_t v) { speaker.port61_write(pit_ticks(), v); };
     // PIC.
     // Non-specific EOI clears the highest-priority request in service.
     port_out[0x20] = [this](uint8_t v) {

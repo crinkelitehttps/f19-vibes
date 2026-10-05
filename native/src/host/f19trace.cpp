@@ -1,11 +1,13 @@
 // Headless runner for bring-up: boots a DOS program from the game directory,
 // logs DOS/BIOS service calls, and dumps the VGA (mode 13h) screen.
 //
-// Usage: f19trace GAMEDIR [-p PROGRAM] [-a ARGS] [-n MILLIONS] [-t] [-s OUT.ppm] [-k KEYS]
+// Usage: f19trace GAMEDIR [-p PROGRAM] [-a ARGS] [-n MILLIONS] [-t] [-s OUT.ppm] [-k KEYS] [-w OUT.wav]
 //   -k KEYS: keys to type, one per emulated second ('\n' = Enter).
+//   -w OUT.wav: record the PC speaker (48 kHz mono).
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <cmath>
 #include <map>
 #include <memory>
 #include <vector>
@@ -50,12 +52,25 @@ static uint8_t scan_for(char c) {
     return 0;
 }
 
+static void write_wav(const char* path, const std::vector<float>& samples) {
+    FILE* f = std::fopen(path, "wb");
+    if (!f) return;
+    auto u32 = [&](uint32_t v) { std::fwrite(&v, 4, 1, f); };
+    auto u16 = [&](uint16_t v) { std::fwrite(&v, 2, 1, f); };
+    uint32_t bytes = uint32_t(samples.size() * 2);
+    std::fwrite("RIFF", 1, 4, f); u32(36 + bytes); std::fwrite("WAVEfmt ", 1, 8, f);
+    u32(16); u16(1); u16(1); u32(PcSpeaker::kRate); u32(PcSpeaker::kRate * 2); u16(2); u16(16);
+    std::fwrite("data", 1, 4, f); u32(bytes);
+    for (float s : samples) u16(uint16_t(int16_t(std::lround(s * 32767))));
+    std::fclose(f);
+}
+
 int main(int argc, char** argv) {
     if (argc < 2) {
-        std::fprintf(stderr, "usage: %s GAMEDIR [-p PROGRAM] [-a ARGS] [-n MILLIONS] [-t] [-s OUT.ppm] [-k KEYS]\n", argv[0]);
+        std::fprintf(stderr, "usage: %s GAMEDIR [-p PROGRAM] [-a ARGS] [-n MILLIONS] [-t] [-s OUT.ppm] [-k KEYS] [-w OUT.wav]\n", argv[0]);
         return 2;
     }
-    std::string program = "F19.COM", args, shot, keys, hires_shot;
+    std::string program = "F19.COM", args, shot, keys, hires_shot, wav;
     double millions = 50;
     double mips_opt = 4.0, refresh_opt = 70.086;
     bool trace = false, prof = false, drv_trace = false, native_drv = false, verify_drv = false;
@@ -73,11 +88,13 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "-H") && i + 1 < argc) { hires_shot = argv[++i]; native_drv = true; }
         else if (!std::strcmp(argv[i], "-s") && i + 1 < argc) shot = argv[++i];
         else if (!std::strcmp(argv[i], "-k") && i + 1 < argc) keys = argv[++i];
+        else if (!std::strcmp(argv[i], "-w") && i + 1 < argc) wav = argv[++i];
     }
     Machine m(argv[1]);
     m.trace = trace;
     m.ips_per_ms = uint32_t(mips_opt * 1000);
     m.vga_refresh_hz = refresh_opt;
+    m.speaker.enabled = !wav.empty();
 
     // -D: trace calls into the graphics driver's exported entry points.
     struct EntryStats { std::vector<int> slots; uint64_t calls = 0; std::map<uint32_t, uint64_t> callers; std::vector<std::string> samples; };
@@ -143,6 +160,11 @@ int main(int argc, char** argv) {
                  m.stop_reason.empty() ? "budget reached" : m.stop_reason.c_str());
     std::fprintf(stderr, "CPU at %04X:%04X\n", m.cpu.regs.s[CS], m.cpu.regs.ip);
     if (!shot.empty()) screenshot(m, shot.c_str());
+    if (!wav.empty()) {
+        m.speaker.advance(m.pit_ticks());
+        write_wav(wav.c_str(), m.speaker.samples);
+        std::fprintf(stderr, "wrote %s: %.1f s\n", wav.c_str(), m.speaker.samples.size() / double(PcSpeaker::kRate));
+    }
     if (gfx && verify_drv) std::fprintf(stderr, "%s", gfx->report().c_str());
     if (gfx) {
         std::fprintf(stderr, "flips %llu in %.1f emulated s\n", (unsigned long long)gfx->stats[44].calls, m.now_us() / 1e6);

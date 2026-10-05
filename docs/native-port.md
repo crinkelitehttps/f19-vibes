@@ -356,7 +356,19 @@ Open / next:
 - VR: playable with the WMR headset (3DOF, offsets in vr.md). Not done:
   external views' overlay head-locked, 90 Hz, world/cockpit scale check,
   6DOF (Basalt diverges).
-- Sound: PC speaker not emulated. Display modes other than VGA unsupported.
+- Sound: PC speaker emulated (`core/pcspeaker.cpp`); the original
+  `ISOUND.EXE` runs in the interpreter (SU picks it for every display but
+  Tandy, which gets `TSOUND`, SN76489 on port C0h: not emulated; `BSOUND`
+  has no port I/O). Effects use PIT channel 2 in mode 3, retuned every
+  timer tick (the driver sets IRQ0 to 60.9 Hz and chains the BIOS every
+  third tick); the title theme is a 3-voice 1-bit synth toggling port 61h
+  bit 1 from a delay loop, calibrated at init against the timer, so its
+  pitch shifts slightly with `--mips` (about 40 cents sharp at 25 vs 4),
+  as it did between real PCs. Changes are applied at their emulated time,
+  integrated exactly per sub-sample (4x), band-limited, and shaped by an
+  approximate small-cone response (`--raw-speaker` skips that). The demo
+  never starts a sound. `f19trace -w OUT.wav` records the speaker.
+  Not yet checked by ear in flight. Display modes other than VGA unsupported.
 - Long-term: 3D cockpit with instrument bitmaps on modelled screens;
   progressive porting of game logic (flight model first, STREAM.DTA as a
   regression input).

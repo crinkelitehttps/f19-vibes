@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "core/cpu.h"
+#include "core/pcspeaker.h"
 
 namespace f19 {
 
@@ -33,6 +34,8 @@ public:
     // Virtual time: instructions per millisecond of emulated time.
     uint32_t ips_per_ms = 4000;
     uint64_t now_us() const { return cpu.instructions * 1000 / ips_per_ms; }
+    // The same, in PIT clock ticks (1.193182 MHz).
+    double pit_ticks() const { return double(cpu.instructions) * (PcSpeaker::kPitHz / 1000.0) / ips_per_ms; }
     // Emulated VGA refresh rate (mode 13h: 70.086 Hz). The game locks its
     // frames to vertical retrace; matching the host display avoids beating.
     double vga_refresh_hz = 70.086;
@@ -55,6 +58,10 @@ public:
     // I/O ports: devices register handlers; unknown ports are logged once.
     std::map<uint16_t, std::function<uint8_t()>> port_in;
     std::map<uint16_t, std::function<void(uint8_t)>> port_out;
+
+    // PC speaker (ports 42h, 43h channel 2, 61h). The host enables it and
+    // drains its samples after calling speaker.advance(pit_ticks()).
+    PcSpeaker speaker;
 
     // VGA DAC (6-bit RGB per entry) - used by the emulated-hardware path.
     uint8_t dac[256][3] = {};

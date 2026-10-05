@@ -14,6 +14,7 @@ add_library(f19core STATIC
   src/core/cpu.cpp
   src/core/machine.cpp
   src/core/dos.cpp
+  src/core/pcspeaker.cpp
   src/drivers/mgraphic.cpp
   src/hires/world_capture.cpp
   src/hires/scene.cpp
