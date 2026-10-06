@@ -33,6 +33,7 @@ so the folder must be writable.'
 w=$out/windows/F19
 mkdir -p "$w/game"
 cp build/windows/f19.exe native/gamepad.cfg LICENSE NOTICE "$w/"
+x86_64-w64-mingw32-strip "$w/f19.exe"
 printf '%s\n' "$gamenote" > "$w/game/PUT-GAME-FILES-HERE.txt"
 cat > "$w/F19.bat" <<'EOF'
 @echo off
