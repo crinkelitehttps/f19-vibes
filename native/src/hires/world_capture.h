@@ -82,7 +82,7 @@ public:
     bool enabled = true;
     // Native scene: terrain tiles enumerated around the camera, per level
     // (1-4) out to this many tiles in every direction.
-    int terrain_radius[5] = {0, 6, 6, 6, 6};
+    int terrain_radius[5] = {0, 12, 6, 6, 6};  // level 1 (buildings, sites) farther
     uint64_t scene_stats[4] = {};   // frames, terrain instances, dynamic instances, overrides
     bool active() const { return found_; }
     std::shared_ptr<const HiresFrame> latest() const { return latest_; }

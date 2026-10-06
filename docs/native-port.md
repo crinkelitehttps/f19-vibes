@@ -256,8 +256,14 @@ from the three angles (`1FE6:1425`), face visibility from the eye in object
 space (`-D u`), colours through the remap table plus the night/haze offset
 (`[8DC]`, from depth and size class). Level of detail uses the engine's
 distance estimate and thresholds (`[8EE]`), divided by our focal length /
-256 so models switch at the same on-screen size (`--lod-detail F` keeps
-detail F times farther). Ground lights are dropped beyond depth 0x2400
+256 so models switch at the same on-screen size, times `--lod-detail F`
+(default 2; Ctrl+F12 steps 1/2/3/4/6). Terrain is enumerated
+`--terrain-radius N` tiles in every direction (default 6) at levels 2-4 and
+`--detail-radius N` (default 12; Alt+F12 steps 6/9/12/18/24) at level 1,
+whose 4096-unit tiles hold the buildings and sites: the engine's LOD
+thresholds are 128 << level shape units (`[8EE]`, shift 0), and most
+building shapes switch at level 5-7, so at 1080p (focal ~6x the original's)
+their detailed bodies reach 25k-100k units, past the old 6-tile radius. Ground lights are dropped beyond depth 0x2400
 (about two tiles, as in the original). Ground objects keep the engine's
 painter order (level 4 to 1, far tiles first); the rest are depth-tested.
 Building the scene takes about 0.2-0.4 ms per frame (~1500 instances).

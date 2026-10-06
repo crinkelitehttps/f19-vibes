@@ -48,7 +48,7 @@ public:
     // 3D view: draw the world from the native scene (all directions, our
     // own level of detail) instead of the engine's captured primitives.
     bool native_world = true;
-    float lod_detail = 1.0f;     // > 1 keeps detailed models farther away
+    float lod_detail = 2.0f;     // > 1 keeps detailed models farther away (1 = the original's on-screen sizes)
     // Native scene lines (HiresPrim::LineStyle). classic_lines: all at
     // line_width, as the original. Otherwise roads and markings are strips
     // on the ground and object edges have a width in the world; both stay at

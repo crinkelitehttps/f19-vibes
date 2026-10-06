@@ -46,16 +46,19 @@
 // Set F19_PERF=1 for a once-a-second timing summary.
 //
 // Usage: f19 [GAMEDIR] [--scale N] [--mips N] [--msaa N] [--vga-hz HZ] [--headtrack-port N] [--headtrack-bind ADDR]
-//            [--trace] [--original-driver] [--verify-driver] [--lowres] [--lod-detail F] [--terrain-radius N]
+//            [--trace] [--original-driver] [--verify-driver] [--lowres] [--lod-detail F] [--terrain-radius N] [--detail-radius N]
 //            [--classic-lines] [--road-width FEET]
 //            [--vr] [--vr-scale F] [--gamepad FILE] [--volume F] [--no-sound] [--raw-speaker] [--manual FILE]
 //   --classic-lines: every line at one screen width, as the original
 //   (Alt+F11 toggles). Otherwise roads and markings are drawn in perspective
 //   (--road-width FEET, default 40), object edges scale with distance, and
 //   mountain ridges thin and fade with distance.
-//   --lod-detail F: > 1 keeps detailed models farther away (default 1 =
-//   switch at the same on-screen size as the original). --terrain-radius N:
-//   terrain tiles drawn in every direction per level (default 6).
+//   --lod-detail F: > 1 keeps detailed models farther away (default 2;
+//   1 = switch at the same on-screen size as the original). --terrain-radius
+//   N: terrain tiles drawn in every direction per level (default 6);
+//   --detail-radius N: the same for level 1, the smallest tiles, which hold
+//   buildings and sites (default 12, about 9 miles). Alt+F12 / Ctrl+F12 step
+//   the detail radius / LOD factor while running.
 //   The 3D world is rendered at the window's resolution unless --lowres
 //   (needs the native driver).
 //   GAMEDIR defaults to the current directory; it must be writable (the
@@ -179,8 +182,8 @@ int main(int argc, char** argv) {
     int headtrack_port = 4242;
     std::string headtrack_bind = "127.0.0.1";
     bool trace = false, original_driver = false, verify_driver = false, lowres = false, no_depth = false;
-    float lod_detail = 1.0f;
-    int terrain_radius = 6;
+    float lod_detail = 2.0f;
+    int terrain_radius = 6, detail_radius = 12;
     bool classic_lines = false;
     float road_width = 40.0f;
     std::string gamepad_cfg, manual_pdf;
@@ -201,6 +204,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--headtrack-bind") && i + 1 < argc) headtrack_bind = argv[++i];
         else if (!std::strcmp(argv[i], "--lod-detail") && i + 1 < argc) lod_detail = float(std::atof(argv[++i]));
         else if (!std::strcmp(argv[i], "--terrain-radius") && i + 1 < argc) terrain_radius = std::max(1, std::atoi(argv[++i]));
+        else if (!std::strcmp(argv[i], "--detail-radius") && i + 1 < argc) detail_radius = std::max(1, std::atoi(argv[++i]));
         else if (!std::strcmp(argv[i], "--classic-lines")) classic_lines = true;
         else if (!std::strcmp(argv[i], "--road-width") && i + 1 < argc) road_width = float(std::atof(argv[++i]));
         else if (!std::strcmp(argv[i], "--vr")) vr = true;
@@ -228,7 +232,8 @@ int main(int argc, char** argv) {
     // High-resolution world rendering: capture the engine's 3D geometry.
     WorldCapture capture(m, native_gfx);
     capture.enabled = !lowres && !original_driver;
-    for (int l = 1; l <= 4; l++) capture.terrain_radius[l] = terrain_radius;
+    for (int l = 2; l <= 4; l++) capture.terrain_radius[l] = terrain_radius;
+    capture.terrain_radius[1] = detail_radius;
     if (!m.dos->start_program("F19.COM", "")) {
         std::fprintf(stderr,
                      "cannot start F19.COM in '%s'\n"
@@ -494,8 +499,25 @@ int main(int argc, char** argv) {
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_EVENT_QUIT) running = false;
             if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.scancode == SDL_SCANCODE_F12 && !ev.key.repeat) {
-                // F12: screenshot; Shift+F12: recentre VR.
-                if ((ev.key.mod & SDL_KMOD_SHIFT) && xr_on) xr.recenter();
+                // F12: screenshot; Shift+F12: recentre VR; Alt+F12: next
+                // detail radius; Ctrl+F12: next LOD factor.
+                if (ev.key.mod & SDL_KMOD_ALT) {
+                    static const int radii[] = {6, 9, 12, 18, 24};
+                    std::lock_guard<std::mutex> lk(mtx);
+                    int& r = capture.terrain_radius[1];
+                    int next = radii[0];
+                    for (int v : radii)
+                        if (v > r) { next = v; break; }
+                    r = next;
+                    std::fprintf(stderr, "detail radius: %d tiles\n", r);
+                } else if (ev.key.mod & SDL_KMOD_CTRL) {
+                    static const float factors[] = {1, 2, 3, 4, 6};
+                    float next = factors[0];
+                    for (float v : factors)
+                        if (v > renderer.lod_detail) { next = v; break; }
+                    renderer.lod_detail = next;
+                    std::fprintf(stderr, "lod detail: %g\n", next);
+                } else if ((ev.key.mod & SDL_KMOD_SHIFT) && xr_on) xr.recenter();
                 else want_screenshot = true;
                 continue;
             }
