@@ -178,7 +178,10 @@ std::shared_ptr<const SceneBody> ShapeCache::body(const Memory& mem, uint32_t li
         uint8_t n = r.u8();
         if (n == 0xFF) {
             // Plane-sorted: 2*np sort bytes, 1 byte, u16 offset[np], u8 count[np], groups.
-            r.off = uint16_t(r.off + 2 * np + 1);
+            // The sort data is the BSP root, then each plane's two children.
+            bd->sort_root = r.u8();
+            bd->sort_tree.resize(np);
+            for (auto& t : bd->sort_tree) t = {r.u8(), r.u8()};
             std::vector<uint16_t> offs(np);
             for (auto& o : offs) o = r.u16();
             std::vector<uint8_t> counts(np);
@@ -186,7 +189,9 @@ std::shared_ptr<const SceneBody> ShapeCache::body(const Memory& mem, uint32_t li
             uint16_t base = r.off;
             for (int g = 0; g < np; g++) {
                 Rd gr{mem, r.seg, uint16_t(base + offs[g])};
+                size_t first = bd->prims.size();
                 for (int i = 0; i < counts[g]; i++) prim(gr);
+                bd->sort_groups.push_back({uint16_t(first), uint16_t(bd->prims.size() - first)});
             }
         } else {
             for (int i = 0; i < n; i++) prim(r);
@@ -212,6 +217,35 @@ std::shared_ptr<const SceneBody> ShapeCache::body(const Memory& mem, uint32_t li
     }
     bodies_[linear] = bd;
     return bd;
+}
+
+// The engine's plane-sorted draw order (EGAME 2000:03E4): an in-order walk
+// of the BSP tree from the root. At a plane facing the eye, child 1 (the
+// far side) is drawn first, then the plane's group, then child 0; at a
+// plane facing away, the other way round.
+std::vector<uint16_t> SceneBody::draw_order(uint32_t visible) const {
+    std::vector<uint16_t> order;
+    if (sort_root < 0) {
+        for (size_t i = 0; i < prims.size(); i++) order.push_back(uint16_t(i));
+        return order;
+    }
+    const size_t np = sort_tree.size();
+    std::vector<bool> seen(np);
+    auto walk = [&](auto& self, int node, int depth) -> void {
+        if (node == 0xFF || size_t(node) >= np || seen[size_t(node)] || depth > 64) return;
+        seen[size_t(node)] = true;
+        bool facing = node < 32 && (visible >> node & 1);
+        const auto& t = sort_tree[size_t(node)];
+        self(self, facing ? t[1] : t[0], depth + 1);
+        if (size_t(node) < sort_groups.size())
+            for (int i = 0; i < sort_groups[size_t(node)][1]; i++) order.push_back(uint16_t(sort_groups[size_t(node)][0] + i));
+        self(self, facing ? t[0] : t[1], depth + 1);
+    };
+    walk(walk, sort_root, 0);
+    for (size_t g = 0; g < np && g < sort_groups.size(); g++)  // malformed tree: draw the rest anyway
+        if (!seen[g])
+            for (int i = 0; i < sort_groups[g][1]; i++) order.push_back(uint16_t(sort_groups[g][0] + i));
+    return order;
 }
 
 // Transform (from the engine's object routines). Coordinates in "u" order
@@ -381,7 +415,8 @@ void build_scene_prims(const Scene& s, const SceneBuildParams& bp, std::vector<H
         std::vector<std::array<float, 3>> cv(b.verts.size());
         for (size_t i = 0; i < b.verts.size(); i++) cv[i] = vert(b.verts[i]);
         const auto up = cam_of(C, 0, 0, 1);  // the shape's ground-plane normal
-        for (const auto& pr : b.prims) {
+        for (uint16_t pi : b.draw_order(visible)) {
+            const auto& pr = b.prims[pi];
             if (pr.poly ? !(visible & (1u << (pr.plane & 31))) : !(visible & pr.mask)) continue;
             HiresPrim p = base;
             p.kind = pr.poly ? HiresPrim::Poly : HiresPrim::Line;

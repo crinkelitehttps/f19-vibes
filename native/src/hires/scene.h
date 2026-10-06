@@ -41,6 +41,13 @@ struct SceneBody {
         std::vector<uint8_t> v;   // poly: vertex loop; line: 2 vertices
     };
     std::vector<Prim> prims;
+    // Plane-sorted bodies: prims come in one group per plane, drawn in an
+    // order the engine picks per view by walking a BSP tree of the planes
+    // (see draw_order). sort_root < 0: draw prims in their stored order.
+    int sort_root = -1;
+    std::vector<std::array<uint8_t, 2>> sort_tree;      // per plane: child 0, child 1 (0xFF = none)
+    std::vector<std::array<uint16_t, 2>> sort_groups;   // per plane: first prim, count
+    std::vector<uint16_t> draw_order(uint32_t visible) const;
     uint8_t point_color = 0;  // Point
 };
 

@@ -134,9 +134,13 @@ are 0–15, remapped at runtime through a table at DGROUP 0x8de (EGA indices
 render correctly as-is). Coordinates: x, y horizontal, z up; terrain tiles
 span ±2048.
 
-Plane-sorted mode (`nprims == 0xFF`): `2*np` bytes of sort data, 1 byte,
-`u16 offset[np]`, `u8 count[np]`, then primitive groups (per plane) at
-base + offset.
+Plane-sorted mode (`nprims == 0xFF`): `u8 root`, `u8 child[np][2]` (a BSP
+tree over the planes, 0xFF = none), `u16 offset[np]`, `u8 count[np]`, then
+primitive groups (per plane) at base + offset. Draw order (EGAME
+2000:03E4) is an in-order walk from the root: at a visible plane, child 1,
+the plane's group, child 0; at a hidden plane, child 0, the group, child 1.
+Groups are drawn whether or not their own plane is visible (their
+primitives carry their own masks).
 
 All 118 shapes in `NC.3D3`, `STFLT.3D3` and `PHOTO.3D3` parse to exactly
 their table lengths.
