@@ -1,3 +1,5 @@
+https://youtu.be/Aq5WXmQQooo?is=JEefi-PMYXV5x6AJ
+
 # F-19 Stealth Fighter demo — reverse engineering & rewrite
 
 Reverse engineering the 1988 MicroProse *F-19 Stealth Fighter* DOS demo, with
