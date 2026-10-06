@@ -1,4 +1,6 @@
-[![IMAGE ALT TEXT HERE](https://youtu.be/vi/Aq5WXmQQooo?is=JEefi-PMYXV5x6AJ/0.jpg)](h[ttps://www.youtube.com/watch?v=](https://youtu.be/Aq5WXmQQooo?is=JEefi-PMYXV5x6AJ)
+
+
+[![Watch the video](https://img.youtube.com/vi/Aq5WXmQQooo/0.jpg)](https://www.youtube.com/watch?v=Aq5WXmQQooo)
 
 https://youtu.be/Aq5WXmQQooo?is=JEefi-PMYXV5x6AJ
 
