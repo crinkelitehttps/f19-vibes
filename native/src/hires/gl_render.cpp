@@ -585,7 +585,12 @@ GLuint GlRenderer::render_view(const HiresFrame& f, int w, int h, const EyeView&
     auto project = [&](const std::array<float, 3>& v) {  // view space, z >= near
         return P2{cx + fx * v[0] / v[2], cy - fy * v[1] / v[2], kNearZ / v[2]};
     };
-    const float lw = std::max(1.0f, line_width * float(w) / 320.0f);
+    // One original pixel in our pixels, from the focal length (not the
+    // window width, which in VR or wide windows covers a wider view), at
+    // the scale a 16:9 window has (4/3 the engine's 256 focal length per
+    // 320 columns), the look the line widths were tuned for.
+    const float px320 = fx / 192.0f;
+    const float lw = std::max(1.0f, line_width * px320);
     const float min_hw = 0.5f * line_min_px * std::max(1.0f, float(h) / 1080.0f);
     // On-screen width of a view-space displacement s at point q, across the
     // screen direction (ux, uy) of the line.
@@ -692,7 +697,7 @@ GLuint GlRenderer::render_view(const HiresFrame& f, int w, int h, const EyeView&
         } else if (p.kind == HiresPrim::Dot) {
             if (vv[0][2] >= kNearZ) {
                 P2 q = project(vv[0]);
-                float s = std::max(1.0f, float(w) / 320.0f) * 0.5f;
+                float s = std::max(1.0f, px320) * 0.5f;
                 auto c = color(p.color);
                 c[3] = p.alpha;
                 if (p.width > 0) {
