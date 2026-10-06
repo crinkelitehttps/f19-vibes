@@ -1,0 +1,15 @@
+f19-vibes is released under the MIT License (see LICENSE), except for the
+third-party files below, which keep their own licenses.
+
+native/data/default8x16.psfu.gz
+    The Linux console font "default8x16", from the kbd project
+    (https://kbd-project.org/), licensed GPL-2.0-or-later. It is compiled
+    into the f19 binary as the built-in text font. Its source is the file
+    itself, included here.
+
+native/third_party/include/GL/glcorearb.h
+native/third_party/include/KHR/khrplatform.h
+    Khronos Group headers, MIT licensed (see the headers).
+
+F-19 Stealth Fighter is (c) MicroProse. This project contains none of its
+files; see the disclaimer in README.md.

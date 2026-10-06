@@ -32,7 +32,7 @@ so the folder must be writable.'
 # Windows
 w=$out/windows/F19
 mkdir -p "$w/game"
-cp build/windows/f19.exe native/gamepad.cfg "$w/"
+cp build/windows/f19.exe native/gamepad.cfg LICENSE NOTICE "$w/"
 printf '%s\n' "$gamenote" > "$w/game/PUT-GAME-FILES-HERE.txt"
 cat > "$w/F19.bat" <<'EOF'
 @echo off
@@ -82,7 +82,7 @@ controls pages are).
 Options go after the .bat name, for example:
   F19.bat --msaa 4 --detail-radius 18 --light-size 5
 EOF
-sed -i 's/$/\r/' "$w"/*.bat "$w"/*.txt "$w"/game/*.txt
+sed -i 's/$/\r/' "$w"/*.bat "$w"/*.txt "$w"/LICENSE "$w"/NOTICE "$w"/game/*.txt
 python3 -I - "$out/windows" "$out/F19-$ver-windows-x64.zip" <<'EOF'
 import os, sys, zipfile
 root, dest = sys.argv[1:]
@@ -96,7 +96,7 @@ EOF
 # Linux
 l=$out/linux/f19-$ver-linux-x86_64
 mkdir -p "$l/game"
-cp build/native/f19 native/gamepad.cfg "$l/"
+cp build/native/f19 native/gamepad.cfg LICENSE NOTICE "$l/"
 strip "$l/f19"
 printf '%s\n' "$gamenote" > "$l/game/PUT-GAME-FILES-HERE.txt"
 cat > "$l/f19.sh" <<'EOF'

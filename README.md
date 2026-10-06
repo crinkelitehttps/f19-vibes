@@ -1,7 +1,14 @@
-# F-19 Stealth Fighter demo — reverse engineering & rewrite
+# f19-vibes: F-19 Stealth Fighter, reverse engineered and ported
 
-Reverse engineering the 1988 MicroProse *F-19 Stealth Fighter* DOS demo, with
-the goal of rewriting it on a modern renderer.
+> **Unofficial fan project.** Not affiliated with or endorsed by MicroProse or
+> the current rights holders of *F-19 Stealth Fighter*. This repository and its
+> releases contain none of the original game's files: to play, you need your
+> own copy of the game. All trademarks belong to their owners.
+
+Reverse engineering the 1988 MicroProse *F-19 Stealth Fighter* (DOS; the demo
+and the full game) and running it natively on Linux and Windows, with a
+high-resolution 3D world, a 3D cockpit, head tracking and VR. Downloads are on
+the Releases page.
 
 ## Layout
 
@@ -80,3 +87,8 @@ Headless bring-up runner (boots F19.COM, traces DOS/BIOS calls):
 ```
 build/native/f19trace out/run/native -n 20 -t -s shot.ppm
 ```
+
+## License
+
+MIT (see `LICENSE`), except the third-party files listed in `NOTICE`: notably
+the built-in console font, which is GPL-2.0-or-later.
