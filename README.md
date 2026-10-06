@@ -1,4 +1,4 @@
-[![Watch the video](https://img.youtube.com/vi/ZFv58EMtnq8/maxresdefault.jpg)](https://www.youtube.com/watch?v=ZFv58EMtnq8)
+[![Watch the video](https://img.youtube.com/vi/ZFv58EMtnq8/hqdefault.jpg)](https://www.youtube.com/watch?v=ZFv58EMtnq8)
 
 # F-19 Stealth Fighter demo — reverse engineering & rewrite
 
