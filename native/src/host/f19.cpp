@@ -47,12 +47,14 @@
 //
 // Usage: f19 [GAMEDIR] [--scale N] [--mips N] [--msaa N] [--vga-hz HZ] [--headtrack-port N] [--headtrack-bind ADDR]
 //            [--trace] [--original-driver] [--verify-driver] [--lowres] [--lod-detail F] [--terrain-radius N] [--detail-radius N]
-//            [--classic-lines] [--road-width FEET]
+//            [--classic-lines] [--road-width FEET] [--light-size FEET]
 //            [--vr] [--vr-scale F] [--gamepad FILE] [--volume F] [--no-sound] [--raw-speaker] [--manual FILE]
 //   --classic-lines: every line at one screen width, as the original
 //   (Alt+F11 toggles). Otherwise roads and markings are drawn in perspective
 //   (--road-width FEET, default 40), object edges scale with distance, and
-//   mountain ridges thin and fade with distance.
+//   mountain ridges thin and fade with distance. --light-size FEET: the
+//   ground speed-cue dots (default 10, drawn 2-6 px wide at 1080p; 0 = one
+//   original pixel).
 //   --lod-detail F: > 1 keeps detailed models farther away (default 2;
 //   1 = switch at the same on-screen size as the original). --terrain-radius
 //   N: terrain tiles drawn in every direction per level (default 6);
@@ -185,7 +187,7 @@ int main(int argc, char** argv) {
     float lod_detail = 2.0f;
     int terrain_radius = 6, detail_radius = 12;
     bool classic_lines = false;
-    float road_width = 40.0f;
+    float road_width = 40.0f, light_size = 10.0f;
     std::string gamepad_cfg, manual_pdf;
     bool sound = true, raw_speaker = false;
     float volume = 0.5f;
@@ -207,6 +209,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--detail-radius") && i + 1 < argc) detail_radius = std::max(1, std::atoi(argv[++i]));
         else if (!std::strcmp(argv[i], "--classic-lines")) classic_lines = true;
         else if (!std::strcmp(argv[i], "--road-width") && i + 1 < argc) road_width = float(std::atof(argv[++i]));
+        else if (!std::strcmp(argv[i], "--light-size") && i + 1 < argc) light_size = float(std::atof(argv[++i]));
         else if (!std::strcmp(argv[i], "--vr")) vr = true;
         else if (!std::strcmp(argv[i], "--vr-scale") && i + 1 < argc) vr_scale = float(std::atof(argv[++i]));
         else if (!std::strcmp(argv[i], "--gamepad") && i + 1 < argc) gamepad_cfg = argv[++i];
@@ -274,6 +277,7 @@ int main(int argc, char** argv) {
     renderer.lod_detail = lod_detail;
     renderer.classic_lines = classic_lines;
     renderer.road_width = road_width;
+    renderer.light_size = light_size;
     renderer.depth = !no_depth;
     if (!renderer.init()) std::fprintf(stderr, "warning: renderer initialisation reported a GL error\n");
     XrOutput xr;

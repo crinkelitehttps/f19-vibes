@@ -399,14 +399,21 @@ void build_scene_prims(const Scene& s, const SceneBuildParams& bp, std::vector<H
         if (b.kind == SceneBody::Lights) {
             for (auto& v : b.verts) {
                 auto c = cam_of(C, v[0] * sz, v[1] * sz, v[2] * sz);
-                float z = (o[2] + c[2]) / sz;
                 // Ground lights are speed cues near the aircraft: beyond
-                // lights_range they only add noise along the horizon.
-                if (z < 1 || z > bp.lights_range) continue;
+                // lights_range they only add noise along the horizon. The
+                // engine measures (and shades by) depth ahead, as it only
+                // draws ahead; we use distance, so they surround the
+                // aircraft in every view direction.
+                float x = o[0] + c[0], y = o[1] + c[1], z = o[2] + c[2];
+                float d = std::sqrt(x * x + y * y + z * z) / sz;
+                if (d > bp.lights_range) continue;
                 HiresPrim p = base;
                 p.kind = HiresPrim::Dot;
                 p.flat = 1;
-                p.color = s.remap[z > 0x1388 ? 8 : z > 0x9C4 ? 7 : 15];
+                p.color = s.remap[d > 0x1388 ? 8 : d > 0x9C4 ? 7 : 15];
+                const float f0 = bp.lights_fade * bp.lights_range;
+                if (d > f0) p.alpha = 1 - (d - f0) / (bp.lights_range - f0);
+                if (!bp.classic_lines) p.width = bp.light_size * 65536.0f;
                 p.v = {{(o[0] + c[0]) * k, (o[1] + c[1]) * k, (o[2] + c[2]) * k}};
                 out.push_back(std::move(p));
             }

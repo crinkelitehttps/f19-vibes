@@ -263,8 +263,14 @@ distance estimate and thresholds (`[8EE]`), divided by our focal length /
 whose 4096-unit tiles hold the buildings and sites: the engine's LOD
 thresholds are 128 << level shape units (`[8EE]`, shift 0), and most
 building shapes switch at level 5-7, so at 1080p (focal ~6x the original's)
-their detailed bodies reach 25k-100k units, past the old 6-tile radius. Ground lights are dropped beyond depth 0x2400
-(about two tiles, as in the original). Ground objects keep the engine's
+their detailed bodies reach 25k-100k units, past the old 6-tile radius. Ground lights (the speed-cue dots) are kept within
+distance 0x2400 of the aircraft (about two tiles) and shaded by distance;
+the engine uses depth ahead for both, which in other view directions
+stretches them sideways and drops them behind. They are 10-foot squares
+(`--light-size`) kept 2-6 px wide at 1080 rows (the original's one pixel is
+6 px there; a realistic size makes them vanish), and fade out over the last
+30% of the range; classic lines keep the
+original's one pixel. Ground objects keep the engine's
 painter order (level 4 to 1, far tiles first); the rest are depth-tested.
 Building the scene takes about 0.2-0.4 ms per frame (~1500 instances).
 

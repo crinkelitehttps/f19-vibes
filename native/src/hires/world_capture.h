@@ -51,7 +51,8 @@ struct HiresPrim {
     // with distance (mountain ridges). Ground and Edge keep a minimum
     // on-screen width and fade out below it.
     enum LineStyle : uint8_t { Screen, Ground, Edge, Relief } line_style = Screen;
-    float width = 0;
+    float width = 0;         // Dot: > 0 a square this wide (camera-space units), else one 320x200 pixel
+    float alpha = 1;         // extra opacity (Dot)
     std::array<float, 3> normal = {0, 0, 0};
     HiresProj proj;
     std::vector<std::array<float, 3>> v;  // camera space (x right, y up, z forward)

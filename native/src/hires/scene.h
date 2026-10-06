@@ -113,7 +113,9 @@ struct SceneBuildParams {
     float road_width = 40.0f;   // world units (feet): free lines on ground decals
     float edge_width = 1.0f;    // shape units: outlines and object edges
     float relief_extent = 2048; // world units: wider raised terrain shapes are relief
-    float lights_range = 0x2400;  // ground lights beyond this depth are dropped (engine: ~2 tiles)
+    float lights_range = 0x2400;  // ground lights beyond this distance are dropped (engine: depth, ~2 tiles)
+    float lights_fade = 0.7f;     // ... fading out from this fraction of the range
+    float light_size = 10;        // world units; 0 or classic_lines: one 320x200 pixel
 };
 
 // Camera-space primitives (x right, y up, z forward; 65536 = one world

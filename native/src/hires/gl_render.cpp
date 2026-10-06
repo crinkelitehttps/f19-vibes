@@ -558,6 +558,7 @@ GLuint GlRenderer::render_view(const HiresFrame& f, int w, int h, const EyeView&
         sp.lod_scale = std::max(1.0f, fx / 256.0f) * lod_detail;
         sp.classic_lines = classic_lines;
         sp.road_width = road_width;
+        sp.light_size = light_size;
         // Both eyes of a stereo frame share the build.
         if (&f != scene_frame_ || f.time_us != scene_time_ || sp.lod_scale != scene_lod_ || classic_lines != scene_classic_) {
             build_scene_prims(*f.scene, sp, scene_prims_);
@@ -692,8 +693,15 @@ GLuint GlRenderer::render_view(const HiresFrame& f, int w, int h, const EyeView&
             if (vv[0][2] >= kNearZ) {
                 P2 q = project(vv[0]);
                 float s = std::max(1.0f, float(w) / 320.0f) * 0.5f;
-                tri_fan({{q.x - s, q.y - s, q.d}, {q.x + s, q.y - s, q.d}, {q.x + s, q.y + s, q.d}, {q.x - s, q.y + s, q.d}},
-                        color(p.color));
+                auto c = color(p.color);
+                c[3] = p.alpha;
+                if (p.width > 0) {
+                    // A square of world size, kept between light_min_px and
+                    // light_max_px wide: a speed cue must stay visible.
+                    const float px = std::max(1.0f, float(h) / 1080.0f) * 0.5f;
+                    s = std::clamp(0.5f * p.width * fx / vv[0][2], light_min_px * px, light_max_px * px);
+                }
+                tri_fan({{q.x - s, q.y - s, q.d}, {q.x + s, q.y - s, q.d}, {q.x + s, q.y + s, q.d}, {q.x - s, q.y + s, q.d}}, c);
             }
         }
         groups_.back().count = int(verts_.size()) - groups_.back().first;

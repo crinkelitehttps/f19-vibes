@@ -60,6 +60,9 @@ public:
     float line_min_px = 1.25f, line_fade_floor = 0.25f;
     float relief_near = 25000.0f, relief_far = 200000.0f, relief_alpha = 0.5f;
     float road_width = 40.0f;    // world units (feet)
+    // Ground speed-cue dots: light_size world units (0 = one 320x200 pixel),
+    // light_min_px..light_max_px wide (window pixels at 1080 rows).
+    float light_size = 10.0f, light_min_px = 2.0f, light_max_px = 6.0f;
 
     // Composited frame at w x h; returns a texture valid until the next call.
     GLuint render_frame(const HiresFrame& f, int w, int h);
