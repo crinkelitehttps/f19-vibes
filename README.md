@@ -1,3 +1,5 @@
+[![IMAGE ALT TEXT HERE](https://youtu.be/vi/Aq5WXmQQooo?is=JEefi-PMYXV5x6AJ/0.jpg)](h[ttps://www.youtube.com/watch?v=](https://youtu.be/Aq5WXmQQooo?is=JEefi-PMYXV5x6AJ)
+
 https://youtu.be/Aq5WXmQQooo?is=JEefi-PMYXV5x6AJ
 
 # F-19 Stealth Fighter demo — reverse engineering & rewrite
