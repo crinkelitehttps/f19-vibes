@@ -49,6 +49,7 @@
 //            [--trace] [--original-driver] [--verify-driver] [--lowres] [--lod-detail F] [--terrain-radius N] [--detail-radius N]
 //            [--classic-lines] [--road-width FEET] [--light-size FEET]
 //            [--vr] [--vr-scale F] [--gamepad FILE] [--volume F] [--no-sound] [--raw-speaker] [--manual FILE]
+//            [--no-gamepad] [--verbose]
 //   --classic-lines: every line at one screen width, as the original
 //   (Alt+F11 toggles). Otherwise roads and markings are drawn in perspective
 //   (--road-width FEET, default 40), object edges scale with distance, and
@@ -189,7 +190,7 @@ int main(int argc, char** argv) {
     bool classic_lines = false;
     float road_width = 40.0f, light_size = 10.0f;
     std::string gamepad_cfg, manual_pdf;
-    bool sound = true, raw_speaker = false;
+    bool sound = true, raw_speaker = false, verbose = false, gamepads = true;
     float volume = 0.5f;
     for (int i = 1; i < argc; i++) {
         if (!std::strcmp(argv[i], "--scale") && i + 1 < argc) scale = std::atoi(argv[++i]);
@@ -217,13 +218,23 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--no-sound")) sound = false;
         else if (!std::strcmp(argv[i], "--raw-speaker")) raw_speaker = true;
         else if (!std::strcmp(argv[i], "--manual") && i + 1 < argc) manual_pdf = argv[++i];
+        else if (!std::strcmp(argv[i], "--verbose")) verbose = true;
+        else if (!std::strcmp(argv[i], "--no-gamepad")) gamepads = false;
         else dir = argv[i];
     }
 
+    // --verbose: each startup step and SDL's own log (for a start that hangs).
+    auto step = [&](const char* what) {
+        if (verbose) std::fprintf(stderr, "startup: %s\n", what);
+        std::fflush(stderr);
+    };
+    if (verbose) SDL_SetLogPriorities(SDL_LOG_PRIORITY_VERBOSE);
+    step("font");
     Font font;
     if (!load_builtin_font(font))
         std::fprintf(stderr, "warning: the built-in console font is unreadable; text mode will be blank\n");
 
+    step("loading the game");
     Machine m(dir);
     m.trace = trace;
     m.ips_per_ms = uint32_t(mips * 1000);
@@ -256,15 +267,18 @@ int main(int argc, char** argv) {
 #endif
     // Gamepad input keeps working while the window is unfocused (in VR).
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
+    step("SDL video");
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 1;
     }
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+    step("window");
     SDL_Window* win = SDL_CreateWindow("F-19 Stealth Fighter (native)", 320 * scale, 240 * scale,
                                        SDL_WINDOW_RESIZABLE | SDL_WINDOW_OPENGL | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    step("OpenGL context");
     SDL_GLContext glc = win ? SDL_GL_CreateContext(win) : nullptr;
     if (!glc || !gl::load()) {
         std::fprintf(stderr, "OpenGL 3.3 unavailable: %s\n", SDL_GetError());
@@ -280,6 +294,13 @@ int main(int argc, char** argv) {
     renderer.light_size = light_size;
     renderer.depth = !no_depth;
     if (!renderer.init()) std::fprintf(stderr, "warning: renderer initialisation reported a GL error\n");
+    // Gamepads after the window: device enumeration can stall on some
+    // drivers, and a window on screen makes that visible (--no-gamepad).
+    if (gamepads) {
+        step("SDL gamepads");
+        if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) std::fprintf(stderr, "warning: no gamepads: %s\n", SDL_GetError());
+    }
+    step("VR");
     XrOutput xr;
     bool xr_on = vr && xr.init(vr_scale), xr_vsync_off = false;
     if (vr && !xr_on) std::fprintf(stderr, "warning: VR unavailable; running on the desktop only\n");
@@ -410,6 +431,7 @@ int main(int argc, char** argv) {
     // rate (the emulation follows the host clock, the device its own).
     SDL_AudioStream* audio = nullptr;
     if (sound) {
+        step("audio");
         SDL_AudioSpec spec{SDL_AUDIO_F32, 1, PcSpeaker::kRate};
         if (SDL_InitSubSystem(SDL_INIT_AUDIO))
             audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
