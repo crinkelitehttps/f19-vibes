@@ -49,7 +49,7 @@
 //            [--trace] [--original-driver] [--verify-driver] [--lowres] [--lod-detail F] [--terrain-radius N] [--detail-radius N]
 //            [--classic-lines] [--road-width FEET] [--light-size FEET]
 //            [--vr] [--vr-scale F] [--gamepad FILE] [--volume F] [--no-sound] [--raw-speaker] [--manual FILE]
-//            [--no-gamepad] [--verbose]
+//            [--no-gamepad] [--directinput] [--verbose]
 //   --classic-lines: every line at one screen width, as the original
 //   (Alt+F11 toggles). Otherwise roads and markings are drawn in perspective
 //   (--road-width FEET, default 40), object edges scale with distance, and
@@ -190,7 +190,7 @@ int main(int argc, char** argv) {
     bool classic_lines = false;
     float road_width = 40.0f, light_size = 10.0f;
     std::string gamepad_cfg, manual_pdf;
-    bool sound = true, raw_speaker = false, verbose = false, gamepads = true;
+    bool sound = true, raw_speaker = false, verbose = false, gamepads = true, directinput = false;
     float volume = 0.5f;
     for (int i = 1; i < argc; i++) {
         if (!std::strcmp(argv[i], "--scale") && i + 1 < argc) scale = std::atoi(argv[++i]);
@@ -220,12 +220,13 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--manual") && i + 1 < argc) manual_pdf = argv[++i];
         else if (!std::strcmp(argv[i], "--verbose")) verbose = true;
         else if (!std::strcmp(argv[i], "--no-gamepad")) gamepads = false;
+        else if (!std::strcmp(argv[i], "--directinput")) directinput = true;
         else dir = argv[i];
     }
 
     // --verbose: each startup step and SDL's own log (for a start that hangs).
     auto step = [&](const char* what) {
-        if (verbose) std::fprintf(stderr, "startup: %s\n", what);
+        if (verbose) std::fprintf(stderr, "startup: %.2f s %s\n", double(SDL_GetTicksNS()) * 1e-9, what);
         std::fflush(stderr);
     };
     if (verbose) SDL_SetLogPriorities(SDL_LOG_PRIORITY_VERBOSE);
@@ -298,9 +299,14 @@ int main(int argc, char** argv) {
     // drivers, and a window on screen makes that visible (--no-gamepad).
     if (gamepads) {
         step("SDL gamepads");
+        // Windows: DirectInput enumeration can take many seconds on some
+        // PCs (it asks every input driver); XInput and raw input cover
+        // Xbox-style pads. --directinput (or SDL_JOYSTICK_DIRECTINPUT=1)
+        // brings it back for older pads.
+        if (!directinput) SDL_SetHint(SDL_HINT_JOYSTICK_DIRECTINPUT, "0");
         if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) std::fprintf(stderr, "warning: no gamepads: %s\n", SDL_GetError());
     }
-    step("VR");
+    step("VR");  // (also marks the end of the gamepad scan)
     XrOutput xr;
     bool xr_on = vr && xr.init(vr_scale), xr_vsync_off = false;
     if (vr && !xr_on) std::fprintf(stderr, "warning: VR unavailable; running on the desktop only\n");
