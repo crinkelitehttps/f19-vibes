@@ -21,11 +21,12 @@
 // resolution the runtime recommends (default 0.7: Monado recommends 1.4x
 // supersampling, too much for an integrated GPU); MSAA defaults to 4x in VR.
 //
-// Gamepad (e.g. Xbox controller): the left stick and right trigger/bumper
-// are the PC joystick (answer Y to "Do you have a joystick?" in setup), the
-// right stick is throttle and look left/right, other buttons press keys,
-// with the left trigger and bumper as two shift layers. In VR the motion
-// controllers do the same (right thumbstick, trigger and grip fly). Bindings: native/gamepad.cfg
+// Gamepad (e.g. Xbox controller), laid out like the VR motion controllers:
+// the right stick and right trigger/bumper are the PC joystick (answer Y to
+// "Do you have a joystick?" in setup), the left stick is the throttle, the
+// left trigger and bumper are two shift layers, Y/A/X/B and the D-pad stand
+// in for the right and left trackpads, and other buttons press keys; shift 1
+// + left stick looks around. Bindings: native/gamepad.cfg
 // (built in), overridden by ~/.config/f19/gamepad.cfg (%APPDATA%\f19\gamepad.cfg on
 // Windows) or --gamepad FILE.
 //

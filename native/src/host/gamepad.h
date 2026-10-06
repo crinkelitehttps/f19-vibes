@@ -89,7 +89,8 @@ private:
         bool invert = false;
         std::vector<Chord> keys;  // Key: one; Cycle: pressed in turn
         size_t step = 0;          // Cycle: the key the next press sends
-        // Key, cycle, recenter, manual: the shift layer it acts in (0 none, 1, 2).
+        // Key, cycle, recenter, manual, stick, look: the shift layer it acts
+        // in (0 none, 1, 2).
         // Shift: the shift it holds (1, 2).
         int layer = 0;
         int pages = 0;            // ManualPage: pages per press (- back)
@@ -98,6 +99,12 @@ private:
         // Its control has a `manual` layer binding, which takes over while
         // the manual is shown.
         bool shadowed = false;
+        // Stick, look: the shift layers (bit n: shift n) in which its axis
+        // has a shifted stick or look binding that takes over.
+        int axis_shadowed = 0;
+        bool axis_action() const {
+            return action == Action::StickX || action == Action::StickY || action == Action::LookX || action == Action::LookY;
+        }
         bool held = false;
         bool was_down = false;    // the control, last update
         uint64_t next_repeat_ns = 0;
@@ -107,6 +114,9 @@ private:
     float deadzone_ = 0.12f, threshold_ = 0.5f;
     SDL_Gamepad* pad_ = nullptr;
     const MotionControllers* vr_ = nullptr;  // during update()
+    // Per hand: the trackpad region a click started in (MPadUp..MPadCenter),
+    // kept until the click is released; -1 while not clicked.
+    int pad_region_[2] = {-1, -1};
 
     float axis(const Control& c) const;
     bool pressed(const Control& c) const;

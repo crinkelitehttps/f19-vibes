@@ -242,8 +242,8 @@ bool Gamepad::load(const std::string& text, const std::string& source) {
         }
         const bool pressable = b.action == Action::Key || b.action == Action::Cycle || b.action == Action::Recenter ||
                                b.action == Action::Manual || b.action == Action::ManualPage;
-        if (layer && !pressable) {
-            fail("only key, cycle, recenter and manual bindings can be shifted");
+        if (layer && !pressable && !b.axis_action()) {
+            fail("only key, cycle, recenter, manual, stick and look bindings can be shifted");
             continue;
         }
         if (manual_layer && !pressable) {
@@ -285,6 +285,11 @@ bool Gamepad::load(const std::string& text, const std::string& source) {
             if (m.manual_layer && !b.manual_layer && m.control.source == b.control.source && m.control.index == b.control.index &&
                 m.control.hand == b.control.hand && m.control.half == b.control.half)
                 b.shadowed = true;
+    for (auto& b : bindings_)
+        for (const auto& m : bindings_)
+            if (b.axis_action() && !b.layer && m.axis_action() && m.layer && m.control.source == b.control.source &&
+                m.control.index == b.control.index && m.control.hand == b.control.hand && m.control.half == b.control.half)
+                b.axis_shadowed |= 1 << m.layer;
     return ok;
 }
 
@@ -342,13 +347,7 @@ bool Gamepad::pressed(const Control& c) const {
         if (c.index == MPadTouch) return vr_->pad_touch[h];
         if (!vr_->pad_click[h]) return false;
         if (c.index == MPadClick) return true;
-        // Trackpad as a four-way pad with a centre button.
-        const float x = vr_->pad[h][0], y = vr_->pad[h][1];
-        const bool centre = x * x + y * y < 0.4f * 0.4f;
-        if (c.index == MPadCenter) return centre;
-        if (centre) return false;
-        if (std::fabs(x) > std::fabs(y)) return c.index == (x < 0 ? MPadLeft : MPadRight);
-        return c.index == (y < 0 ? MPadUp : MPadDown);
+        return c.index == pad_region_[h];
     }
     float v = axis(c);
     return (c.half ? v * c.half : v) > threshold_;
@@ -381,6 +380,19 @@ Gamepad::State Gamepad::update(uint64_t now_ns, const MotionControllers* vr, boo
     State s;
     vr_ = vr;
     s.connected = pad_ || (vr && (vr->active[0] || vr->active[1]));
+    // Trackpad as a four-way pad with a centre button. The region is taken
+    // where the click starts and held until it ends, so a finger rolling
+    // across the pad mid-click cannot press a second region.
+    for (int h = 0; h < 2; h++) {
+        if (!vr || !vr->active[h] || !vr->pad_click[h]) {
+            pad_region_[h] = -1;
+        } else if (pad_region_[h] < 0) {
+            const float x = vr->pad[h][0], y = vr->pad[h][1];
+            if (x * x + y * y < 0.4f * 0.4f) pad_region_[h] = MPadCenter;
+            else if (std::fabs(x) > std::fabs(y)) pad_region_[h] = x < 0 ? MPadLeft : MPadRight;
+            else pad_region_[h] = y < 0 ? MPadUp : MPadDown;
+        }
+    }
     // Shift layer: 1 or 2 while that shift is held (3, both, has no bindings).
     int layer = 0;
     for (auto& b : bindings_)
@@ -389,6 +401,10 @@ Gamepad::State Gamepad::update(uint64_t now_ns, const MotionControllers* vr, boo
     // own layer and then stays held until the control is released, whatever
     // the shifts do meanwhile. While the manual is shown, `manual` layer
     // bindings act (whatever the shifts) in place of their controls' others.
+    // A stick or look binding acts whatever the shifts, unless its axis has
+    // one in the held shift's layer, which takes over; a shifted one acts
+    // only in its layer.
+    auto axis_active = [&](const Binding& b) { return b.layer ? layer == b.layer : !(b.axis_shadowed & (1 << layer)); };
     auto press = [&](Binding& b) {
         bool raw = pressed(b.control);
         bool active = b.manual_layer ? manual_shown : layer == b.layer && !(manual_shown && b.shadowed);
@@ -398,10 +414,18 @@ Gamepad::State Gamepad::update(uint64_t now_ns, const MotionControllers* vr, boo
     };
     for (auto& b : bindings_) {
         switch (b.action) {
-            case Action::StickX: s.stick_x += b.invert ? -axis(b.control) : axis(b.control); break;
-            case Action::StickY: s.stick_y += b.invert ? -axis(b.control) : axis(b.control); break;
-            case Action::LookX: s.look_x += b.invert ? -axis(b.control) : axis(b.control); break;
-            case Action::LookY: s.look_y -= b.invert ? -axis(b.control) : axis(b.control); break;  // stick up looks up
+            case Action::StickX:
+                if (axis_active(b)) s.stick_x += b.invert ? -axis(b.control) : axis(b.control);
+                break;
+            case Action::StickY:
+                if (axis_active(b)) s.stick_y += b.invert ? -axis(b.control) : axis(b.control);
+                break;
+            case Action::LookX:
+                if (axis_active(b)) s.look_x += b.invert ? -axis(b.control) : axis(b.control);
+                break;
+            case Action::LookY:
+                if (axis_active(b)) s.look_y -= b.invert ? -axis(b.control) : axis(b.control);  // stick up looks up
+                break;
             case Action::Button1: s.button[0] |= pressed(b.control); break;
             case Action::Button2: s.button[1] |= pressed(b.control); break;
             case Action::Shift: break;

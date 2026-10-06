@@ -324,7 +324,7 @@ the counts don't depend on host speed; it reads as empty while no
 controller is connected. An SDL gamepad drives it through bindings in
 `native/gamepad.cfg` (built in; `~/.config/f19/gamepad.cfg` or
 `--gamepad FILE` override): stick axes, the two fire buttons, look-around
-(right stick x, springs back), and keys with modifiers (held = typematic
+(springs back; shift 1 + left stick on the pad), and keys with modifiers (held = typematic
 repeat after 500 ms at 20/s), in three layers: two controls act as shift 1
 and shift 2 (left trigger and left bumper / grip), chosen at press time.
 The default layout follows the cockpit's left and right halves; see the
